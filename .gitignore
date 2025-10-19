@@ -1,0 +1,14 @@
+# ambientes locais e caches
+.venv/
+__pycache__/
+*.pyc
+
+# saídas/arquivos locais
+outputs/
+*.xlsx
+*.xls
+*.csv
+
+# editor
+.vscode/
+.DS_Store
