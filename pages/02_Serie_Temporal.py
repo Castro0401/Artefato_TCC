@@ -31,7 +31,7 @@ def label_to_period(lbl: str) -> pd.Period:
 def period_to_label(p: pd.Period) -> str:
     return f"{_REV_PT[p.month]}/{str(p.year)[-2:]}"
 
-# ordenar e criar eixo temporal contínuo
+# ordenar e criar eixo contínuo (preenche meses faltantes com NaN)
 df["p"] = df["ds"].apply(label_to_period)
 df = df.sort_values("p").reset_index(drop=True)
 full_idx = pd.period_range(df["p"].min(), df["p"].max(), freq="M")
@@ -56,13 +56,15 @@ cv = 100 * std / mean if mean else np.nan
 
 q1, q3 = y.quantile(0.25), y.quantile(0.75)
 iqr = float(q3 - q1)
-# crescimento aproximado (média do início vs fim da série)
+
+# Crescimento aproximado: média do início vs. fim (janelas iguais)
 def cagr_simple(y_series: pd.Series) -> float | None:
     v = y_series.dropna().values
     if len(v) < 6:
         return np.nan
-    a = float(np.nanmean(v[:max(1, len(v)//4)]))
-    b = float(np.nanmean(v[-max(1, len(v)//4):]))
+    w = max(1, len(v)//4)
+    a = float(np.nanmean(v[:w]))
+    b = float(np.nanmean(v[-w:]))
     return (b/a - 1) * 100 if a else np.nan
 cagr = cagr_simple(y)
 
@@ -80,7 +82,9 @@ k7.metric("Observações (meses)", f"{n}")
 k8.metric("Faltas", f"{n_missing} ({pct_missing:.1f}%)")
 k9.metric("Zeros", f"{n_zeros}")
 
-st.caption("Notas: CV = desvio padrão / média. Crescimento aproximado compara início vs. fim da série.")
+st.caption(
+    "CV = desvio padrão / média. Crescimento (~%) compara médias do início e do fim da série para suavizar ruído."
+)
 
 # ---------------------------------------------------------------------
 # 2) Gráfico da série
@@ -89,82 +93,94 @@ st.subheader("Série mensal")
 st.line_chart(df_full.set_index("ts")["y"], height=300, use_container_width=True)
 
 # ---------------------------------------------------------------------
-# 3) Distribuição e boxplot por mês (mesmo tamanho)
+# 3) Distribuição (histograma interativo) e boxplot por mês (mesmo tamanho)
 # ---------------------------------------------------------------------
-df_full["mes_num"] = df_full["p"].dt.month
-df_full["mes_lab"]  = df_full["mes_num"].map(_REV_PT)
+import altair as alt
+df_plot = df_full.copy()
+df_plot["mes_lab"] = df_plot["p"].apply(period_to_label)
 
 colL, colR = st.columns(2)
+
 with colL:
-    st.markdown("**Histograma da demanda**")
-    import matplotlib.pyplot as plt
-    fig_h, ax_h = plt.subplots(figsize=(6, 3))  # mesma “altura” do boxplot
-    ax_h.hist(df_full["y"].dropna().values, bins="auto")
-    ax_h.set_xlabel("y"); ax_h.set_ylabel("freq.")
-    st.pyplot(fig_h, clear_figure=True, use_container_width=True)
+    st.markdown("**Histograma da demanda (interativo)**")
+    # histograma com binning automático do Altair + tooltip
+    hist = (
+        alt.Chart(df_plot.dropna(subset=["y"]))
+        .mark_bar()
+        .encode(
+            x=alt.X("y:Q", bin=alt.Bin(maxbins=20), title="y"),
+            y=alt.Y("count()", title="freq."),
+            tooltip=[alt.Tooltip("count():Q", title="freq."), alt.Tooltip("y:Q", bin=True)],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(hist, use_container_width=True)
 
 with colR:
     st.markdown("**Boxplot por mês**")
-    try:
-        fig_b, ax_b = plt.subplots(figsize=(6, 3))  # mesmo tamanho do histograma
-        data_months = [df_full.loc[df_full["mes_num"]==m, "y"].dropna().values for m in range(1,13)]
-        ax_b.boxplot(data_months, showfliers=True)
-        ax_b.set_xticklabels([_REV_PT[m] for m in range(1,13)])
-        ax_b.set_ylabel("y")
-        st.pyplot(fig_b, clear_figure=True, use_container_width=True)
-    except ModuleNotFoundError:
-        st.warning("Para ver o boxplot por mês, instale `matplotlib`:\n\n`python -m pip install matplotlib`")
+    box = (
+        alt.Chart(df_plot.dropna(subset=["y"]))
+        .mark_boxplot()
+        .encode(x=alt.X("mes_lab:N", title="Mês"), y=alt.Y("y:Q", title="y"), tooltip=["mes_lab:N", "y:Q"])
+        .properties(height=260)
+    )
+    st.altair_chart(box, use_container_width=True)
 
 # ---------------------------------------------------------------------
-# 4) Qualidade dos dados (aberta, em linhas) + outliers (IQR)
+# 4) Tendência e Sazonalidade (periodicidade mensal = 12)
 # ---------------------------------------------------------------------
-st.subheader("Qualidade dos dados")
-low_thr, high_thr = q1 - 1.5*(q3-q1), q3 + 1.5*(q3-q1)
+st.subheader("Tendência e Sazonalidade")
+try:
+    from statsmodels.tsa.seasonal import seasonal_decompose
+    y_clean = y.interpolate(limit_direction="both")
+    # exige série regular; period=12 para mensal
+    result = seasonal_decompose(y_clean, model="additive", period=12, extrapolate_trend="freq")
+    # monta dataframes para plotar
+    ts_index = df_full["ts"]
+    trend_df = pd.DataFrame({"ts": ts_index, "Tendência": result.trend})
+    seas_df  = pd.DataFrame({"ts": ts_index, "Sazonalidade": result.seasonal})
 
-# Meses faltantes (NaN)
+    cA, cB = st.columns(2)
+    with cA:
+        st.line_chart(trend_df.set_index("ts"), height=260, use_container_width=True)
+    with cB:
+        st.line_chart(seas_df.set_index("ts"), height=260, use_container_width=True)
+
+except Exception as e:
+    st.info("Para exibir tendência e sazonalidade, é necessário `statsmodels`. "
+            "Se já estiver instalado, talvez a série esteja curta ou com poucos pontos válidos.")
+    st.caption(f"Detalhe técnico: {e}")
+
+# ---------------------------------------------------------------------
+# 5) Qualidade dos dados (resumo textual + tabela de outliers)
+# ---------------------------------------------------------------------
+st.subheader("Qualidade dos Dados")
+
+# Faltas
 missing_df = df_full.loc[y.isna(), ["p"]].copy()
 missing_df["Mês"] = missing_df["p"].apply(period_to_label)
-missing_df = missing_df[["Mês"]]
+missing_list = ", ".join(missing_df["Mês"].tolist())
 
 # Outliers (IQR)
+low_thr, high_thr = q1 - 1.5*(q3-q1), q3 + 1.5*(q3-q1)
 outliers_df = df_full.loc[(y < low_thr) | (y > high_thr), ["p","y"]].copy()
 outliers_df["Mês"] = outliers_df["p"].apply(period_to_label)
 outliers_df.rename(columns={"y":"Quantidade"}, inplace=True)
 outliers_df = outliers_df[["Mês","Quantidade"]]
 
-row1, row2 = st.columns(2)
-with row1:
-    st.write(f"**Faltas:** {len(missing_df)} mês(es).")
-    if len(missing_df):
-        st.dataframe(missing_df, use_container_width=True, height=150)
-    else:
-        st.success("Sem meses faltantes.")
+st.markdown(f"**Dados faltando:** {len(missing_df)}"
+            + (f" — meses: {missing_list}" if len(missing_df) else ""))
 
-with row2:
-    st.write(f"**Outliers (IQR):** {len(outliers_df)} ocorrência(s).")
-    if len(outliers_df):
-        st.dataframe(outliers_df, use_container_width=True, height=150)
-    else:
-        st.success("Sem outliers pelo critério IQR.")
+st.markdown(f"**Outliers (IQR):** **{len(outliers_df)}** ocorrência(s) "
+            f"(limiares: baixo < {low_thr:.1f} | alto > {high_thr:.1f} — Q1={q1:.1f}, Q3={q3:.1f}, IQR={iqr:.1f}).")
 
-st.caption(f"Limiares IQR: baixo < {low_thr:.1f} | alto > {high_thr:.1f} (Q1={q1:.1f}, Q3={q3:.1f}, IQR={iqr:.1f}).")
-
-# ---------------------------------------------------------------------
-# 5) Estacionariedade (ADF) — opcional (sem ACF/PACF)
-# ---------------------------------------------------------------------
-try:
-    from statsmodels.tsa.stattools import adfuller
-    y_clean = y.interpolate(limit_direction="both")
-    try:
-        _, pval, *_ = adfuller(y_clean.values, autolag="AIC")
-        st.metric("ADF (p-valor)", f"{pval:.4f}", help="p < 0.05 sugere estacionariedade (nível).")
-    except Exception as e:
-        st.warning(f"Não foi possível rodar o ADF: {e}")
-except ModuleNotFoundError:
-    pass  # não exibe nada se não houver statsmodels
+# Tabela apenas para os outliers (se houver)
+if len(outliers_df):
+    st.dataframe(outliers_df, use_container_width=True, height=160)
 
 # ---------------------------------------------------------------------
 # 6) Navegação
 # ---------------------------------------------------------------------
 st.divider()
 st.page_link("pages/03_Previsao.py", label="➡️ Seguir para **Previsão (Passo 3)**", icon="🔮")
+
