@@ -117,12 +117,22 @@ with colL:
     st.altair_chart(hist, use_container_width=True)
 
 with colR:
-    st.markdown("**Boxplot por mês**")
+    st.markdown("**Boxplot por mês (Jan–Dez)**")
+
+    # extrair o número e o nome do mês
+    df_plot["mes_num"] = df_plot["p"].dt.month
+    df_plot["mes_lab"] = df_plot["mes_num"].map(_REV_PT)
+
+    # gerar boxplot consolidado por mês (todos os anos)
     box = (
         alt.Chart(df_plot.dropna(subset=["y"]))
-        .mark_boxplot()
-        .encode(x=alt.X("mes_lab:N", title="Mês"), y=alt.Y("y:Q", title="y"), tooltip=["mes_lab:N", "y:Q"])
-        .properties(height=260)
+        .mark_boxplot(size=30)
+        .encode(
+            x=alt.X("mes_lab:N", title="Mês", sort=list(_REV_PT.values())),
+            y=alt.Y("y:Q", title="Demanda"),
+            tooltip=["mes_lab:N", "y:Q"]
+        )
+        .properties(height=300)
     )
     st.altair_chart(box, use_container_width=True)
 
