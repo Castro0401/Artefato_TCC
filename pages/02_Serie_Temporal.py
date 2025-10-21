@@ -40,21 +40,52 @@ df_full["ts"] = df_full["p"].dt.to_timestamp()
 y = df_full["y"].astype(float)
 
 # ---------------------------------------------------------------------
-# 1) Indicadores descritivos
+# Tratamento de faltantes: MÉDIA DOS VIZINHOS (com fallback linear)
+# ---------------------------------------------------------------------
+def fill_missing_neighbors_with_linear_fallback(y_series: pd.Series) -> pd.Series:
+    y0 = y_series.copy()
+    prev = y0.shift(1)
+    next_ = y0.shift(-1)
+
+    # média dos vizinhos imediatos para NaN com dois vizinhos válidos
+    neigh_mean = (prev + next_) / 2.0
+    mask_two_neighbors = y0.isna() & prev.notna() & next_.notna()
+
+    y_out = y0.copy()
+    y_out.loc[mask_two_neighbors] = neigh_mean.loc[mask_two_neighbors]
+
+    # fallback: se sobrar NaN (bordas/blocos), usa interpolação linear bilateral
+    if y_out.isna().any():
+        y_out = y_out.interpolate(limit_direction="both")
+
+    return y_out
+
+y_filled = fill_missing_neighbors_with_linear_fallback(y)
+
+# Selo informativo
+n_missing_orig = int(y.isna().sum())
+if n_missing_orig > 0:
+    st.caption(f"🔧 Dados faltantes tratados por **média dos vizinhos imediatos** "
+               f"(fallback: interpolação linear). Meses faltantes originais: {n_missing_orig}.")
+else:
+    st.caption("✅ Série sem faltantes — nenhuma imputação necessária.")
+
+# ---------------------------------------------------------------------
+# 1) Indicadores descritivos (usando y_filled)
 # ---------------------------------------------------------------------
 n = len(df_full)
-n_missing = int(y.isna().sum())
+n_missing = int(y.isna().sum())                  # faltantes do original (transparência)
 pct_missing = 100 * n_missing / n
-n_zeros = int((y.fillna(0) == 0).sum())
+n_zeros = int((y_filled == 0).sum())             # zeros após imputação
 
-mean = float(y.mean())
-median = float(y.median())
-std = float(y.std())
-min_ = float(y.min()) if y.size else np.nan
-max_ = float(y.max()) if y.size else np.nan
+mean = float(y_filled.mean())
+median = float(y_filled.median())
+std = float(y_filled.std())
+min_ = float(y_filled.min()) if y_filled.size else np.nan
+max_ = float(y_filled.max()) if y_filled.size else np.nan
 cv = 100 * std / mean if mean else np.nan
 
-q1, q3 = y.quantile(0.25), y.quantile(0.75)
+q1, q3 = y_filled.quantile(0.25), y_filled.quantile(0.75)
 iqr = float(q3 - q1)
 
 # Crescimento aproximado: média do início vs. fim (janelas iguais)
@@ -66,7 +97,8 @@ def cagr_simple(y_series: pd.Series) -> float | None:
     a = float(np.nanmean(v[:w]))
     b = float(np.nanmean(v[-w:]))
     return (b/a - 1) * 100 if a else np.nan
-cagr = cagr_simple(y)
+
+cagr = cagr_simple(y_filled)
 
 st.subheader("Análise descritiva")
 k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -79,8 +111,8 @@ k6.metric("Crescimento (~%)", f"{cagr:.1f}" if cagr==cagr else "—")
 
 k7, k8, k9 = st.columns(3)
 k7.metric("Observações (meses)", f"{n}")
-k8.metric("Faltas", f"{n_missing} ({pct_missing:.1f}%)")
-k9.metric("Zeros", f"{n_zeros}")
+k8.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
+k9.metric("Zeros (após imputação)", f"{n_zeros}")
 
 st.caption(
     "CV = desvio padrão / média. Crescimento (~%) compara médias do início e do fim da série para suavizar ruído."
@@ -90,20 +122,20 @@ st.caption(
 # 2) Gráfico da série
 # ---------------------------------------------------------------------
 st.subheader("Série mensal")
-st.line_chart(df_full.set_index("ts")["y"], height=300, use_container_width=True)
+st.line_chart(df_full.assign(y=y_filled).set_index("ts")["y"], height=300, use_container_width=True)
 
 # ---------------------------------------------------------------------
 # 3) Distribuição (histograma interativo) e boxplot por mês (mesmo tamanho)
 # ---------------------------------------------------------------------
 import altair as alt
 df_plot = df_full.copy()
+df_plot["y"] = y_filled  # usar série imputada
 df_plot["mes_lab"] = df_plot["p"].apply(period_to_label)
 
 colL, colR = st.columns(2)
 
 with colL:
     st.markdown("**Histograma da demanda (interativo)**")
-    # histograma com binning automático do Altair + tooltip
     hist = (
         alt.Chart(df_plot.dropna(subset=["y"]))
         .mark_bar()
@@ -118,12 +150,9 @@ with colL:
 
 with colR:
     st.markdown("**Boxplot por mês (Jan–Dez)**")
-
-    # extrair o número e o nome do mês
     df_plot["mes_num"] = df_plot["p"].dt.month
     df_plot["mes_lab"] = df_plot["mes_num"].map(_REV_PT)
 
-    # gerar boxplot consolidado por mês (todos os anos)
     box = (
         alt.Chart(df_plot.dropna(subset=["y"]))
         .mark_boxplot(size=30)
@@ -142,10 +171,9 @@ with colR:
 st.subheader("Tendência e Sazonalidade")
 try:
     from statsmodels.tsa.seasonal import seasonal_decompose
-    y_clean = y.interpolate(limit_direction="both")
-    # exige série regular; period=12 para mensal
+    y_clean = y_filled  # já sem NaN após imputação
     result = seasonal_decompose(y_clean, model="additive", period=12, extrapolate_trend="freq")
-    # monta dataframes para plotar
+
     ts_index = df_full["ts"]
     trend_df = pd.DataFrame({"ts": ts_index, "Tendência": result.trend})
     seas_df  = pd.DataFrame({"ts": ts_index, "Sazonalidade": result.seasonal})
@@ -166,25 +194,27 @@ except Exception as e:
 # ---------------------------------------------------------------------
 st.subheader("Qualidade dos Dados")
 
-# Faltas
+# Faltas (com base no original y)
 missing_df = df_full.loc[y.isna(), ["p"]].copy()
 missing_df["Mês"] = missing_df["p"].apply(period_to_label)
 missing_list = ", ".join(missing_df["Mês"].tolist())
 
-# Outliers (IQR)
+# Outliers (IQR) com base na série imputada
 low_thr, high_thr = q1 - 1.5*(q3-q1), q3 + 1.5*(q3-q1)
-outliers_df = df_full.loc[(y < low_thr) | (y > high_thr), ["p","y"]].copy()
+outliers_mask = (y_filled < low_thr) | (y_filled > high_thr)
+outliers_df = df_full.loc[outliers_mask, ["p"]].copy()
 outliers_df["Mês"] = outliers_df["p"].apply(period_to_label)
-outliers_df.rename(columns={"y":"Quantidade"}, inplace=True)
+outliers_df["Quantidade"] = y_filled.loc[outliers_df.index].values
 outliers_df = outliers_df[["Mês","Quantidade"]]
 
-st.markdown(f"**Dados faltando:** {len(missing_df)}"
+st.markdown(f"**Dados faltando (originais):** {len(missing_df)}"
             + (f" — meses: {missing_list}" if len(missing_df) else ""))
 
-st.markdown(f"**Outliers (IQR):** **{len(outliers_df)}** ocorrência(s) "
-            f"(limiares: baixo < {low_thr:.1f} | alto > {high_thr:.1f} — Q1={q1:.1f}, Q3={q3:.1f}, IQR={iqr:.1f}).")
+st.markdown(
+    f"**Outliers (IQR, após imputação):** **{len(outliers_df)}** ocorrência(s) "
+    f"(limiares: baixo < {low_thr:.1f} | alto > {high_thr:.1f} — Q1={q1:.1f}, Q3={q3:.1f}, IQR={iqr:.1f})."
+)
 
-# Tabela apenas para os outliers (se houver)
 if len(outliers_df):
     st.dataframe(outliers_df, use_container_width=True, height=160)
 
@@ -193,4 +223,3 @@ if len(outliers_df):
 # ---------------------------------------------------------------------
 st.divider()
 st.page_link("pages/03_Previsao.py", label="➡️ Seguir para **Previsão (Passo 3)**", icon="🔮")
-
