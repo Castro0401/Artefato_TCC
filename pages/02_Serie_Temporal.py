@@ -114,19 +114,12 @@ k4.metric("Mín / Máx", f"{min_:.0f} / {max_:.0f}" if min_==min_ and max_==max_
 k5.metric("CV (%)", f"{cv:.1f}" if np.isfinite(cv) else "—")
 k6.metric("Crescimento (~%)", f"{cagr:.1f}" if cagr==cagr else "—")
 
-# Linha 2 — Observações, Faltas e Zeros juntos
-c_obs, c_miss, c_zero = st.columns([1.2, 1, 1], gap="small")
-c_obs.metric("Observações (meses)", f"{n}")
-c_miss.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
-c_zero.metric("Zeros (após imputação)", f"{n_zeros}")
-
-# CSS leve para compactar
-st.markdown("""
-<style>
-div[data-testid="column"] { padding-left: .3rem; padding-right: .3rem; }
-div[data-testid="stMetric"] { margin-bottom: .25rem; }
-</style>
-""", unsafe_allow_html=True)
+# Linha 2 — alinhada às MESMAS 6 colunas da linha 1
+k1b, k2b, k3b, k4b, k5b, k6b = st.columns(6)
+k1b.metric("Observações (meses)", f"{n}")                             # abaixo de Média
+k2b.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")     # abaixo de Mediana
+k3b.metric("Zeros (após imputação)", f"{n_zeros}")                     # abaixo de Desv. Padrão
+# (k4b, k5b, k6b deixados intencionalmente vazios para manter alinhamento)
 
 st.caption(
     "CV = desvio padrão / média. Crescimento (~%) compara médias do início e do fim da série para suavizar ruído."
