@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 st.set_page_config(page_title="Série Temporal — Análise Exploratória", page_icon="📈", layout="wide")
 st.title("📈 Série Temporal — Análise Exploratória")
@@ -67,7 +68,7 @@ n_missing_orig = int(y.isna().sum())
 if n_missing_orig > 0:
     st.caption(
         f"🔧 Dados faltantes tratados por **média dos vizinhos imediatos** "
-        f"Meses faltantes originais: {n_missing_orig}."
+        f"(fallback: interpolação linear). Meses faltantes originais: {n_missing_orig}."
     )
 else:
     st.caption("✅ Série sem faltantes — nenhuma imputação necessária.")
@@ -113,14 +114,19 @@ k4.metric("Mín / Máx", f"{min_:.0f} / {max_:.0f}" if min_==min_ and max_==max_
 k5.metric("CV (%)", f"{cv:.1f}" if np.isfinite(cv) else "—")
 k6.metric("Crescimento (~%)", f"{cagr:.1f}" if cagr==cagr else "—")
 
-# Linha 2 — “Faltas” e “Zeros” mais próximos
-col_left, col_right = st.columns([2, 2])
-with col_left:
-    st.metric("Observações (meses)", f"{n}")
-with col_right:
-    c1, c2 = st.columns(2, gap="small")
-    c1.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
-    c2.metric("Zeros (após imputação)", f"{n_zeros}")
+# Linha 2 — Observações, Faltas e Zeros juntos
+c_obs, c_miss, c_zero = st.columns([1.2, 1, 1], gap="small")
+c_obs.metric("Observações (meses)", f"{n}")
+c_miss.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
+c_zero.metric("Zeros (após imputação)", f"{n_zeros}")
+
+# CSS leve para compactar
+st.markdown("""
+<style>
+div[data-testid="column"] { padding-left: .3rem; padding-right: .3rem; }
+div[data-testid="stMetric"] { margin-bottom: .25rem; }
+</style>
+""", unsafe_allow_html=True)
 
 st.caption(
     "CV = desvio padrão / média. Crescimento (~%) compara médias do início e do fim da série para suavizar ruído."
@@ -135,7 +141,6 @@ st.line_chart(df_full.assign(y=y_filled).set_index("ts")["y"], height=300, use_c
 # ---------------------------------------------------------------------
 # 3) Distribuição (histograma interativo) e boxplot por mês (mesmo tamanho)
 # ---------------------------------------------------------------------
-import altair as alt
 df_plot = df_full.copy()
 df_plot["y"] = y_filled  # usar série imputada
 df_plot["mes_lab"] = df_plot["p"].apply(period_to_label)
