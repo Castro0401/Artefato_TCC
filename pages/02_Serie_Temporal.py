@@ -65,8 +65,10 @@ y_filled = fill_missing_neighbors_with_linear_fallback(y)
 # Selo informativo
 n_missing_orig = int(y.isna().sum())
 if n_missing_orig > 0:
-    st.caption(f"🔧 Dados faltantes tratados por **média dos vizinhos imediatos** "
-               f"(fallback: interpolação linear). Meses faltantes originais: {n_missing_orig}.")
+    st.caption(
+        f"🔧 Dados faltantes tratados por **média dos vizinhos imediatos** "
+        f"Meses faltantes originais: {n_missing_orig}."
+    )
 else:
     st.caption("✅ Série sem faltantes — nenhuma imputação necessária.")
 
@@ -101,6 +103,8 @@ def cagr_simple(y_series: pd.Series) -> float | None:
 cagr = cagr_simple(y_filled)
 
 st.subheader("Análise descritiva")
+
+# Linha 1 — KPIs principais
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric("Média", f"{mean:.1f}" if mean==mean else "—")
 k2.metric("Mediana", f"{median:.1f}" if median==median else "—")
@@ -109,10 +113,14 @@ k4.metric("Mín / Máx", f"{min_:.0f} / {max_:.0f}" if min_==min_ and max_==max_
 k5.metric("CV (%)", f"{cv:.1f}" if np.isfinite(cv) else "—")
 k6.metric("Crescimento (~%)", f"{cagr:.1f}" if cagr==cagr else "—")
 
-k7, k8, k9 = st.columns(3)
-k7.metric("Observações (meses)", f"{n}")
-k8.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
-k9.metric("Zeros (após imputação)", f"{n_zeros}")
+# Linha 2 — “Faltas” e “Zeros” mais próximos
+col_left, col_right = st.columns([2, 2])
+with col_left:
+    st.metric("Observações (meses)", f"{n}")
+with col_right:
+    c1, c2 = st.columns(2, gap="small")
+    c1.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
+    c2.metric("Zeros (após imputação)", f"{n_zeros}")
 
 st.caption(
     "CV = desvio padrão / média. Crescimento (~%) compara médias do início e do fim da série para suavizar ruído."
