@@ -68,7 +68,7 @@ n_missing_orig = int(y.isna().sum())
 if n_missing_orig > 0:
     st.caption(
         f"🔧 Dados faltantes tratados por **média dos vizinhos imediatos** "
-        f"(fallback: interpolação linear). Meses faltantes originais: {n_missing_orig}."
+        f"Meses faltantes originais: {n_missing_orig}."
     )
 else:
     st.caption("✅ Série sem faltantes — nenhuma imputação necessária.")
