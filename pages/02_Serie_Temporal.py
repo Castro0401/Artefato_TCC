@@ -8,6 +8,12 @@ import altair as alt
 st.set_page_config(page_title="Série Temporal — Análise Exploratória", page_icon="📈", layout="wide")
 st.title("📈 Série Temporal — Análise Exploratória")
 
+# --- guarda de etapa: precisa ter feito o Upload ---
+if "ts_df_norm" not in st.session_state:
+    st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
+    st.page_link("pages/01_📤_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.stop()
+
 # ---------------------------------------------------------------------
 # 0) Entrada (ds, y) do Passo 1
 # ---------------------------------------------------------------------

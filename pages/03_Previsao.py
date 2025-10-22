@@ -7,6 +7,12 @@ import streamlit as st
 st.set_page_config(page_title="Previsão & PCP — Previsão", page_icon="🔮", layout="wide")
 st.title("🔮 Passo 2 — Previsão de Demanda")
 
+# --- guarda de etapa: precisa do Upload ---
+if "ts_df_norm" not in st.session_state:
+    st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
+    st.page_link("pages/01_📤_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.stop()
+
 # ---------- helpers ----------
 _PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
 _REV_PT = {v:k for k, v in _PT.items()}
@@ -120,11 +126,23 @@ st.info(
     "`st.session_state['forecast_h']`."
 )
 
-# ---------- navegação ----------
+# ---------- salvar previsão p/ MPS + navegação ----------
 st.divider()
-go_mps = st.button("➡️ Usar esta previsão e seguir para o MPS", type="primary")
-if go_mps:
+col_save, col_go = st.columns([1,1])
+with col_save:
+    save_ok = st.button("💾 Salvar previsão para o MPS", type="secondary")
+with col_go:
+    go_mps = st.button("➡️ Usar esta previsão e ir para o MPS", type="primary")
+
+if save_ok or go_mps:
+    # persiste dados para o MPS
+    st.session_state["forecast_df"] = forecast_df
+    st.session_state["forecast_h"]  = int(horizon)
+    st.session_state["forecast_committed"] = True
+    st.success(f"Previsão salva para o MPS (h={horizon}).")
+
+if go_mps and st.session_state.get("forecast_committed", False):
     try:
         st.switch_page("pages/03_🗓️_MPS.py")
     except Exception:
-        st.success("Previsão salva! Abra o MPS no menu lateral.")
+        st.info("Previsão salva! Abra o MPS no menu lateral.")

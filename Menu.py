@@ -26,7 +26,7 @@ Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos *
 ---
 
 ### Principais Outputs  
-- 📈 **Previsão de demanda** para os próximos **6 meses**, identificando automaticamente o modelo mais adequado à série temporal.  
+- 📈 **Previsão de demanda** para os próximos **6,8 ou 12 meses**, identificando automaticamente o modelo mais adequado à série temporal.  
 - 🗓️ **MPS** (Master Production Schedule) e 🧩 **MRP** (Material Requirements Planning) interativos.  
 - 📊 **Dashboards executivos** para visualização consolidada dos resultados e apoio à decisão.  
 """)

@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Passo 1 • Upload da Série", page_icon="📤", layout="wide")
-
 st.title("📤 Passo 1: Upload da Série temporal do produto a ser analisado")
 
 st.markdown("""
@@ -13,14 +12,14 @@ st.markdown("""
 1. A série deve ter **coluna de datas `ds`** (mensal) e **coluna de quantidade `y`**.  
 2. É importante ter **pelo menos 50 observações**.  
 3. O arquivo deve ser **Excel** (`.xlsx` ou `.xls`).  
-4. O modelo projetará **6 meses à frente**, escolhendo automaticamente o **modelo ideal**.
+4. No Passo 2, o usuário poderá escolher o horizonte da previsão (**6, 8 ou 12 meses**), e isso alimentará o MPS (Passo 3).
 """)
 
 st.divider()
 st.subheader("Fluxo deste artefato")
 st.markdown("""
 1. **Enviar série temporal** (Excel com `ds` e `y`).  
-2. Gerar **previsão de 6 meses** com o melhor modelo (*em integração*).  
+2. Gerar **previsão (6/8/12 meses)** com o melhor modelo (*em integração*).  
 3. Construir **MPS** e **MRP** interativos para apoiar o PCP.  
 4. Exibir **dashboards** e permitir **exportação**.
 """)
@@ -79,7 +78,12 @@ if file:
     st.session_state["ts_df_norm"] = monthly
     st.session_state["upload_ok"] = True
 
-    st.info("A partir desses dados, será realizada a projeção dos próximos 6 meses, utilizando o modelo mais adequado possível.")
+    # ✨ Invalida previsões anteriores (obriga a salvar uma nova no Passo 2)
+    st.session_state.pop("forecast_df", None)
+    st.session_state.pop("forecast_h", None)
+    st.session_state["forecast_committed"] = False
+
+    st.info("Série carregada. No **Passo 2**, escolha o horizonte (6/8/12 meses) e salve a previsão para liberar o **MPS**.")
     st.page_link("pages/02_Serie_Temporal.py", label="➡️ Seguir para Análise da Série Temporal")
 else:
     st.info("Envie um Excel com colunas **ds** e **y** para continuar.")
