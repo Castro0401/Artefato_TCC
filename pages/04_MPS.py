@@ -26,13 +26,13 @@ if "ts_df_norm" not in st.session_state:
 if not st.session_state.get("forecast_committed", False):
     st.warning("Preciso que você **salve a previsão** no Passo 2 (Previsão) antes de abrir o MPS.")
     # ajuste o path conforme o seu arquivo de previsão
-    st.page_link("pages/02_Previsao.py", label="Ir para o Passo 2 — Previsão")
+    st.page_link("pages/03_Previsao.py", label="Ir para o Passo 2 — Previsão")
     st.stop()
 
 # 3) Precisa ter forecast_df e forecast_h presentes
 if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state:
     st.error("Previsão não encontrada no estado. Volte ao Passo 2, salve a previsão e retorne.")
-    st.page_link("pages/02_Previsao.py", label="Ir para o Passo 2 — Previsão")
+    st.page_link("pages/03_Previsao.py", label="Ir para o Passo 2 — Previsão")
     st.stop()
 
 # ---------------------------------------------------------------------
