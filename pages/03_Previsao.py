@@ -10,7 +10,7 @@ st.title("🔮 Passo 2 — Previsão de Demanda")
 # --- guarda de etapa: precisa do Upload ---
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
 # ---------- helpers ----------
@@ -42,7 +42,7 @@ def next_n_months(last_period: pd.Period, n: int) -> list[str]:
 # ---------- entrada: série mensal do Passo 1 ----------
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série mensal do Passo 1 (Upload).")
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
 hist = st.session_state["ts_df_norm"].copy()      # ['ds','y'] com labels tipo 'Set/25'
@@ -143,6 +143,6 @@ if save_ok or go_mps:
 
 if go_mps and st.session_state.get("forecast_committed", False):
     try:
-        st.switch_page("pages/03_🗓️_MPS.py")
+        st.switch_page("pages/03_MPS.py")
     except Exception:
         st.info("Previsão salva! Abra o MPS no menu lateral.")

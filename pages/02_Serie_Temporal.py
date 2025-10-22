@@ -11,7 +11,7 @@ st.title("📈 Série Temporal — Análise Exploratória")
 # --- guarda de etapa: precisa ter feito o Upload ---
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
 # ---------------------------------------------------------------------
@@ -19,7 +19,7 @@ if "ts_df_norm" not in st.session_state:
 # ---------------------------------------------------------------------
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload).")
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
 df = st.session_state["ts_df_norm"].copy()  # colunas: ds (ex.: 'Set/25'), y (quantidade)
@@ -234,4 +234,4 @@ if len(outliers_df):
 # 6) Navegação
 # ---------------------------------------------------------------------
 st.divider()
-st.page_link("pages/03_Previsao.py", label="➡️ Seguir para **Previsão (Passo 3)**", icon="🔮")
+st.page_link("pages/03_Previsao.py", label="➡️ Seguir para **Previsão (Passo 3)**")

@@ -1,4 +1,4 @@
-# pages/03_mps.py  (ou 03_🗓️_MPS.py)
+# pages/03_MPS.py
 from __future__ import annotations
 import io
 from pathlib import Path
