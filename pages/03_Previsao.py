@@ -143,6 +143,6 @@ if save_ok or go_mps:
 
 if go_mps and st.session_state.get("forecast_committed", False):
     try:
-        st.switch_page("pages/03_MPS.py")
+        st.switch_page("pages/04_MPS.py")
     except Exception:
         st.info("Previsão salva! Abra o MPS no menu lateral.")
