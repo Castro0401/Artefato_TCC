@@ -19,20 +19,20 @@ st.title("🗓️ MPS — Plano Mestre de Produção (mensal)")
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
     # ajuste o path conforme o seu arquivo de upload
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
+    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
 # 2) Precisa ter salvo/commitado a Previsão (Passo 2)
 if not st.session_state.get("forecast_committed", False):
     st.warning("Preciso que você **salve a previsão** no Passo 2 (Previsão) antes de abrir o MPS.")
     # ajuste o path conforme o seu arquivo de previsão
-    st.page_link("pages/02_Previsao.py", label="Ir para o Passo 2 — Previsão", icon="🔮")
+    st.page_link("pages/02_Previsao.py", label="Ir para o Passo 2 — Previsão")
     st.stop()
 
 # 3) Precisa ter forecast_df e forecast_h presentes
 if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state:
     st.error("Previsão não encontrada no estado. Volte ao Passo 2, salve a previsão e retorne.")
-    st.page_link("pages/02_Previsao.py", label="Ir para o Passo 2 — Previsão", icon="🔮")
+    st.page_link("pages/02_Previsao.py", label="Ir para o Passo 2 — Previsão")
     st.stop()
 
 # ---------------------------------------------------------------------
