@@ -1,4 +1,4 @@
-# pages/02_🔮_Previsão.py
+# pages/03_Previsao.py
 from __future__ import annotations
 import numpy as np
 import pandas as pd
@@ -40,11 +40,6 @@ def next_n_months(last_period: pd.Period, n: int) -> list[str]:
     return out
 
 # ---------- entrada: série mensal do Passo 1 ----------
-if "ts_df_norm" not in st.session_state:
-    st.warning("Preciso da série mensal do Passo 1 (Upload).")
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
-    st.stop()
-
 hist = st.session_state["ts_df_norm"].copy()      # ['ds','y'] com labels tipo 'Set/25'
 
 # ---------- “modelo” (simulado) ----------
@@ -57,10 +52,9 @@ with st.expander("Configuração do modelo (simulado por enquanto)", expanded=Tr
     # Horizonte restrito às opções pedidas
     horizon = st.selectbox("Horizonte (meses)", [6, 8, 12], index=0,
                            help="Escolha 6, 8 ou 12 meses. O MPS usará esse mesmo horizonte.")
-    seed = st.number_input("Semente aleatória (reprodutibilidade)", min_value=0, value=42, step=1)
 
 # ---------- previsão (SIMULAÇÃO enquanto o modelo real não chega) ----------
-np.random.seed(int(seed))
+rng = np.random.default_rng()  # sem semente fixa; cada execução pode variar
 
 # prepara histórico
 hist_work = hist.copy()
@@ -72,26 +66,26 @@ y_ma = pd.Series(y).rolling(3, min_periods=1).mean().values
 sigma = max(np.std(y - y_ma), 1.0)
 
 last_p = hist_work["p"].iloc[-1]
-future_labels = next_n_months(last_p, horizon)
+future_labels = next_n_months(last_p, int(horizon))
 
 # simula tendência leve + ruído proporcional
 trend = (y_ma[-1] - y_ma[max(len(y_ma)-4,0)]) / max(3, len(y_ma)-1)
 sim_vals, base = [], y_ma[-1]
-for _ in range(horizon):
+for _ in range(int(horizon)):
     base = base + trend  # tendência linear simples
-    sim_vals.append(max(0, base + np.random.normal(0, 0.6*sigma)))
+    sim_vals.append(max(0, base + rng.normal(0, 0.6*sigma)))
 
 forecast_df = pd.DataFrame({"ds": future_labels, "y": np.round(sim_vals).astype(int)})
 
 # ---------- métricas fake (meramente ilustrativas) ----------
-mape = np.clip(np.random.normal(8, 2), 4, 15)    # %
-rmse = max(1.0, np.random.normal(25, 8))
+mape = np.clip(rng.normal(8, 2), 4, 15)    # %
+rmse = max(1.0, rng.normal(25, 8))
 
-# ---------- persistência para o MPS ----------
-# chaves canônicas para a próxima página
+# ---------- persistência automática para o MPS (auto-commit) ----------
 st.session_state["forecast_df"] = forecast_df          # tabela ds / y
 st.session_state["forecast_h"]  = int(horizon)         # inteiro 6/8/12
-# compatibilidade retro (se alguma página ainda usa o nome antigo):
+st.session_state["forecast_committed"] = True          # libera o MPS no menu
+# compat antigo (se alguma página ainda usa o nome antigo):
 st.session_state["forecast_df_6m"] = forecast_df if horizon == 6 else forecast_df.copy()
 
 # ---------- visualizações ----------
@@ -102,7 +96,7 @@ with left:
     # prepara série contínua com datas reais para o gráfico
     hist_plot = hist_work.assign(ts=hist_work["p"].dt.to_timestamp())[["ts","y"]]
     last_ts = hist_plot["ts"].iloc[-1]
-    fut_ts = pd.date_range(last_ts + pd.offsets.MonthBegin(1), periods=horizon, freq="MS")
+    fut_ts = pd.date_range(last_ts + pd.offsets.MonthBegin(1), periods=int(horizon), freq="MS")
     fut_plot = pd.DataFrame({"ts": fut_ts, "y": forecast_df["y"]})
 
     chart_df = (pd.concat([hist_plot.assign(tipo="Histórico"),
@@ -126,23 +120,11 @@ st.info(
     "`st.session_state['forecast_h']`."
 )
 
-# ---------- salvar previsão p/ MPS + navegação ----------
+# ---------- Navegação: apenas 1 botão (à esquerda) ----------
 st.divider()
-col_save, col_go = st.columns([1,1])
-with col_save:
-    save_ok = st.button("💾 Salvar previsão para o MPS", type="secondary")
-with col_go:
-    go_mps = st.button("➡️ Usar esta previsão e ir para o MPS", type="primary")
-
-if save_ok or go_mps:
-    # persiste dados para o MPS
-    st.session_state["forecast_df"] = forecast_df
-    st.session_state["forecast_h"]  = int(horizon)
-    st.session_state["forecast_committed"] = True
-    st.success(f"Previsão salva para o MPS (h={horizon}).")
-
-if go_mps and st.session_state.get("forecast_committed", False):
+go_mps = st.button("➡️ Usar esta previsão e ir para o MPS", type="primary")
+if go_mps:
     try:
-        st.switch_page("pages/04_MPS.py")
+        st.switch_page("pages/04_MPS.py")  # nome real do seu arquivo do MPS
     except Exception:
-        st.info("Previsão salva! Abra o MPS no menu lateral.")
+        st.info("Previsão salva! Abra o **MPS** pelo menu lateral.")
