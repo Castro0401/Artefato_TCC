@@ -26,7 +26,7 @@ UPLOAD_PAGE = first_existing(["pages/01_Upload.py", "pages/01_upload.py"])
 SERIE_PAGE  = first_existing(["pages/02_Serie_Temporal.py"])
 ROBUST_PAGE = first_existing(["pages/03_Analise_Detalhada.py"])
 PREV_PAGE   = first_existing(["pages/04_Previsao.py", "pages/03_Previsao.py"])
-MPS_PAGE    = first_existing(["pages/04_MPS.py", "pages/03_MPS.py", "pages/03_mps.py"])
+MPS_PAGE    = first_existing(["pages/05_MPS.py", "pages/03_MPS.py", "pages/03_mps.py"])
 
 if not UPLOAD_PAGE: missing_msgs.append("• Passo 1 (Upload) não encontrado.")
 if not SERIE_PAGE:  missing_msgs.append("• Passo 2 (Série Temporal) não encontrado.")
