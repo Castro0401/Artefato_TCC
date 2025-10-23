@@ -20,9 +20,10 @@ PAGES = [
     {"path": f"{PAGES_DIR}/01_Upload.py",            "title": "Upload",             "icon": "📤"},
     {"path": f"{PAGES_DIR}/02_Serie_Temporal.py",    "title": "Série Temporal",     "icon": "📈"},
     {"path": f"{PAGES_DIR}/03_Analise_Detalhada.py", "title": "Análise Detalhada",  "icon": "🔎"},
-    {"path": f"{PAGES_DIR}/04_MPS.py",               "title": "MPS",                "icon": "🗓️"},
-    {"path": f"{PAGES_DIR}/05_MRP.py",               "title": "MRP",                "icon": "🧩"},
-    {"path": f"{PAGES_DIR}/06_Dashboard.py",         "title": "Dashboard",          "icon": "📊"},
+    {"path": f"{PAGES_DIR}/04_Previsao.py",          "title": "Previsão",           "icon": "📈"},
+    {"path": f"{PAGES_DIR}/05_MPS.py",               "title": "MPS",                "icon": "🗓️"},
+    #{"path": f"{PAGES_DIR}/06_MRP.py",               "title": "MRP",                "icon": "🧩"},
+    #{"path": f"{PAGES_DIR}/07_Dashboard.py",         "title": "Dashboard",          "icon": "📊"},
 ]
 
 # =========================
