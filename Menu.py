@@ -17,7 +17,7 @@ NAV = st.navigation(
         st.Page("pages/02_Serie_Temporal.py",    title="Série Temporal",    icon="📈"),
         st.Page("pages/03_Analise_Detalhada.py", title="Análise Detalhada", icon="🧪"),
         st.Page("pages/04_Previsao.py",          title="Previsão",          icon="🔮"),
-        st.Page("pages/04_MPS.py",               title="MPS",               icon="🗓️"),
+        st.Page("pages/05_MPS.py",               title="MPS",               icon="🗓️"),
     ],
     position="sidebar",
     expanded=False,
