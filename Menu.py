@@ -1,4 +1,4 @@
-# app_streamlit.py
+# Menu.py
 # Rodar: streamlit run app_streamlit.py
 from __future__ import annotations
 import streamlit as st
@@ -12,7 +12,7 @@ st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide"
 # Isso evita erros de caminhos inexistentes.
 PAGES = st.navigation(
     pages=[
-        st.Page("app_streamlit.py",               title="Início",            icon="🧭"),
+        st.Page("Menu.py",               title="Início",            icon="🧭"),
         st.Page("pages/01_Upload.py",             title="Upload",            icon="📤"),
         st.Page("pages/02_Serie_Temporal.py",     title="Série Temporal",    icon="📈"),
         st.Page("pages/03_Analise_Detalhada.py",  title="Análise Detalhada", icon="🧪"),
