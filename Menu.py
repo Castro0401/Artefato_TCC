@@ -8,22 +8,20 @@ import streamlit as st
 
 st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide")
 
-# ---------- (novo) Menu lateral explícito, sem mexer no texto ----------
+# --------- MENU LATERAL (sem incluir o próprio Menu.py) ---------
 def exists(p: str) -> bool:
     return Path(p).exists()
 
 pages_list = []
-# Home (este próprio arquivo)
-pages_list.append(st.Page("Menu.py", title="Início", icon="🧭"))
+# NÃO adicionar Menu.py aqui para não duplicar o conteúdo
 
-# Adiciona cada página apenas se o arquivo existir (evita erros)
 if exists("pages/01_Upload.py"):
     pages_list.append(st.Page("pages/01_Upload.py", title="Upload", icon="📤"))
 if exists("pages/02_Serie_Temporal.py"):
     pages_list.append(st.Page("pages/02_Serie_Temporal.py", title="Série Temporal", icon="📈"))
 if exists("pages/03_Analise_Detalhada.py"):
     pages_list.append(st.Page("pages/03_Analise_Detalhada.py", title="Análise Detalhada", icon="🧪"))
-# Previsão pode estar como 03 ou 04 — tente os dois, sem alterar o texto da home
+# Previsão pode ser 04_... ou 03_...
 if exists("pages/04_Previsao.py"):
     pages_list.append(st.Page("pages/04_Previsao.py", title="Previsão", icon="🔮"))
 elif exists("pages/03_Previsao.py"):
@@ -77,7 +75,6 @@ with col1:
     go = st.button("➡️ Iniciar - Passo 1 (Upload da Série Temporal)", type="primary")
 
 if go:
-    # tenta 01_Upload.py; se não existir, mostra orientação
     target = "pages/01_Upload.py"
     if exists(target):
         try:
@@ -85,7 +82,7 @@ if go:
         except Exception:
             st.info("Se o botão não funcionar automaticamente, acesse o menu lateral e clique em **Upload**.")
     else:
-        st.error("Arquivo de Upload não encontrado em /pages (esperado: '01_Upload.py').")
+        st.error("Arquivo de Upload não encontrado. Verifique se 'pages/01_Upload.py' existe.")
 
-# Importante: execute a navegação ao final
+# Importante: chama a navegação no final
 NAV.run()
