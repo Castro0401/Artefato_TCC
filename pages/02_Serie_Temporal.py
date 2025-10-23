@@ -231,7 +231,30 @@ if len(outliers_df):
     st.dataframe(outliers_df, use_container_width=True, height=160)
 
 # ---------------------------------------------------------------------
-# 6) Navegação
+# 6) Próximo passo: Análise detalhada (técnica) ou Previsão
 # ---------------------------------------------------------------------
 st.divider()
-st.page_link("pages/03_Previsao.py", label="➡️ Seguir para **Previsão (Passo 3)**")
+st.markdown(
+    "### Próximo passo\n"
+    "Você pode seguir direto para a **Previsão** ou, se preferir, abrir uma **Análise detalhada** "
+    "(teste de estacionariedade ADF/KPSS, autocorrelação Ljung–Box, ACF/PACF, etc.). "
+    "**Atenção:** esta análise é mais técnica e voltada a quem tem familiaridade com métodos de séries temporais."
+)
+
+col_flag, col_btn = st.columns([2, 1])
+with col_flag:
+    want_robust = st.checkbox("Quero ver a **Análise detalhada (técnica)** antes da previsão", value=False)
+with col_btn:
+    go_next = st.button("Continuar", type="primary")
+
+ROBUST_PAGE   = "pages/03_Analise_Detalhada.py"
+PREVISAO_PAGE = "pages/04_Previsao.py"   
+
+if go_next:
+    target = ROBUST_PAGE if want_robust else PREVISAO_PAGE
+    try:
+        st.switch_page(target)
+    except Exception:
+        # fallback seguro caso esteja rodando em modo sem multipage
+        st.info("Abrindo o próximo passo pelo menu lateral.")
+        st.page_link(target, label="Abrir próxima página")
