@@ -1,5 +1,4 @@
 # Menu.py
-# Página inicial - "Previsão & PCP"
 # Rodar: streamlit run Menu.py
 
 from __future__ import annotations
@@ -7,11 +6,29 @@ import streamlit as st
 
 st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide")
 
-# -------- Cabeçalho --------
+# =========================
+# MENU LATERAL (st.navigation)
+# =========================
+# Registre somente as páginas do diretório /pages.
+# Não inclua este próprio arquivo para não duplicar o conteúdo da home.
+NAV = st.navigation(
+    pages=[
+        st.Page("pages/01_Upload.py",            title="Upload",            icon="📤"),
+        st.Page("pages/02_Serie_Temporal.py",    title="Série Temporal",    icon="📈"),
+        st.Page("pages/03_Analise_Detalhada.py", title="Análise Detalhada", icon="🧪"),
+        st.Page("pages/04_Previsao.py",          title="Previsão",          icon="🔮"),
+        st.Page("pages/04_MPS.py",               title="MPS",               icon="🗓️"),
+    ],
+    position="sidebar",
+    expanded=False,
+)
+
+# =========================
+# SEU TEXTO (inalterado)
+# =========================
 st.title("🧭 Previsão & PCP")
 st.subheader("Integração entre Modelos de Previsão e Planejamento e Controle da Produção (PCP)")
 
-# -------- Texto principal --------
 st.markdown("""
 ### O que é  
 Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***, integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita  a criação de **dashboards executivos** que auxiliam a **análise de resultados** e a **tomada de decisão** de forma simples e visual.
@@ -33,20 +50,24 @@ Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos *
 
 st.divider()
 
-# -------- Navegação para próxima etapa --------
+# =========================
+# Botão para iniciar (Upload)
+# =========================
 st.markdown("### Comece agora")
 st.markdown(
     "A seguir, envie a **série temporal** do produto que deseja analisar. "
     "O sistema processará os dados, executará os modelos de previsão e gerará os planos MPS e MRP."
 )
 
-# Botão principal
-col1, col2 = st.columns([1, 4])
+col1, _ = st.columns([1, 4])
 with col1:
-    go = st.button("➡️ Iniciar - Passo 1 (Upload da Série Temporal)", type="primary")
+    if st.button("➡️ Iniciar - Passo 1 (Upload da Série Temporal)", type="primary"):
+        try:
+            st.switch_page("pages/01_Upload.py")
+        except Exception:
+            st.info("Se não abrir automaticamente, use o menu lateral: **Upload**.")
 
-if go:
-    try:
-        st.switch_page("pages/01_Upload.py")
-    except Exception:
-        st.info("Se o botão não funcionar automaticamente, acesse o menu lateral e clique em **Passo 1 - Upload**.")
+# =========================
+# Executa a navegação (deixe por último)
+# =========================
+NAV.run()
