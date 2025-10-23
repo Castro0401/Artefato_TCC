@@ -1,133 +1,120 @@
 # Menu.py
-# Rodar: streamlit run Menu.py
-
 from __future__ import annotations
-import os
+import os, glob, re
+from pathlib import Path
 import streamlit as st
 from packaging import version
 
-# =========================
-# CONFIGURAÇÃO BÁSICA
-# =========================
 st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide")
 
 APP_TITLE = "🧭 Previsão & PCP"
 APP_SUBTITLE = "Integração entre Modelos de Previsão e Planejamento e Controle da Produção (PCP)"
-
-# Defina os caminhos das páginas (NOMES DE ARQUIVOS SEM ACENTO/EMOJI!)
 PAGES_DIR = "pages"
-PAGES = [
-    {"path": f"{PAGES_DIR}/01_Upload.py",            "title": "Upload",             "icon": "📤"},
-    {"path": f"{PAGES_DIR}/02_Serie_Temporal.py",    "title": "Série Temporal",     "icon": "📈"},
-    {"path": f"{PAGES_DIR}/03_Analise_Detalhada.py", "title": "Análise Detalhada",  "icon": "🔎"},
-    {"path": f"{PAGES_DIR}/04_Previsao.py",          "title": "Previsão",           "icon": "📈"},
-    {"path": f"{PAGES_DIR}/05_MPS.py",               "title": "MPS",                "icon": "🗓️"},
-    #{"path": f"{PAGES_DIR}/06_MRP.py",               "title": "MRP",                "icon": "🧩"},
-    #{"path": f"{PAGES_DIR}/07_Dashboard.py",         "title": "Dashboard",          "icon": "📊"},
-]
 
-# =========================
-# VALIDAÇÕES DE ESTRUTURA
-# =========================
-missing = [p for p in PAGES if not os.path.exists(p["path"])]
-if not os.path.exists(PAGES_DIR):
-    st.warning(f"Diretório `{PAGES_DIR}/` não encontrado ao lado do Menu.py. Crie `{PAGES_DIR}/` e coloque as páginas lá.")
-elif missing:
-    st.warning("Algumas páginas configuradas não foram encontradas no disco:")
-    for m in missing:
-        st.write("•", m["path"])
-    st.info("A navegação ainda funciona para as páginas existentes, mas confira os nomes/paths acima.")
+# -------- descobrir páginas automaticamente (ordem 01_, 02_, ...)
+def human_title(filename: str) -> str:
+    base = Path(filename).stem                 # ex: "04_Previsao"
+    base = re.sub(r"^\d+_", "", base)          # -> "Previsao"
+    mapping = {
+        "Previsao": "Previsão",
+        "Serie_Temporal": "Série Temporal",
+        "Analise_Detalhada": "Análise Detalhada",
+        "Upload": "Upload",
+        "MPS": "MPS",
+        "MRP": "MRP",
+        "Dashboard": "Dashboard",
+    }
+    return mapping.get(base, base.replace("_"," "))
 
-# =========================
-# CABEÇALHO
-# =========================
+def discover_pages():
+    files = sorted(glob.glob(f"{PAGES_DIR}/*.py"))  # ordena: 01_, 02_...
+    pages = []
+    for f in files:
+        title = human_title(Path(f).name)
+        icon = "📄"
+        if "Upload" in title: icon = "📤"
+        elif "Série Temporal" in title or "Previsão" in title: icon = "📈"
+        elif "Análise" in title: icon = "🔎"
+        elif "MPS" in title: icon = "🗓️"
+        elif "MRP" in title: icon = "🧩"
+        elif "Dashboard" in title: icon = "📊"
+        pages.append({"path": f, "title": title, "icon": icon})
+    return pages
+
+PAGES = discover_pages()
+
+# -------- cabeçalho
 st.title(APP_TITLE)
 st.subheader(APP_SUBTITLE)
 
 st.markdown("""
 ### O que é  
-Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***, integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita a criação de **dashboards executivos** que auxiliam a **análise de resultados** e a **tomada de decisão** de forma simples e visual.
+Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***, integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita a criação de **dashboards executivos** que auxiliam a **análise de resultados** e a **tomada de decisão**.
 
 ---
 
 ### Benefícios  
-- **Apoio tecnológico** para geração de previsões consistentes e embasadas em métodos validados na literatura.  
-- **Integração automática** entre previsão, planejamento (MPS/MRP) e indicadores.  
-- **Fluxo contínuo e intuitivo:**  🧾 **DADOS → 🤖 PREVER → 🏭 PLANEJAR**.  
+- **Apoio tecnológico** para previsões consistentes.  
+- **Integração automática** entre previsão, MPS/MRP e indicadores.  
+- **Fluxo contínuo:** 🧾 **DADOS → 🤖 PREVER → 🏭 PLANEJAR**.  
 
 ---
 
 ### Principais Outputs  
-- 📈 **Previsão de demanda** para os próximos **6, 8 ou 12 meses**, identificando automaticamente o modelo mais adequado à série temporal.  
-- 🗓️ **MPS** (Master Production Schedule) e 🧩 **MRP** (Material Requirements Planning) interativos.  
-- 📊 **Dashboards executivos** para visualização consolidada dos resultados e apoio à decisão.  
+- 📈 **Previsão** (6/8/12 meses) com seleção automática de modelo.  
+- 🗓️ **MPS** e 🧩 **MRP** interativos.  
+- 📊 **Dashboards** executivos.  
 """)
 
 st.divider()
-
 st.markdown("### Comece agora")
-st.markdown(
-    "A seguir, envie a **série temporal** do produto que deseja analisar. "
-    "O sistema processará os dados, executará os modelos de previsão e gerará os planos MPS e MRP."
-)
+st.markdown("Envie a **série temporal** do produto. O sistema processa, prevê e gera MPS/MRP.")
 
-# =========================
-# NAVEGAÇÃO (com fallback)
-# =========================
-# Preferência: usar st.navigation (Streamlit mais novo)
+# -------- navegação (incluindo a Home!)
 st_ver = version.parse(st.__version__)
-has_navigation = hasattr(st, "navigation")  # disponível nas versões mais recentes
-has_page_link = hasattr(st, "page_link")    # fallback elegante em versões ~1.24+
+has_navigation = hasattr(st, "navigation")
+has_page_link = hasattr(st, "page_link")
 
-# Renderiza navegação lateral
-def render_sidebar_links():
-    with st.sidebar:
-        st.header("Navegação")
-        st.page_link("Menu.py", label="Home", icon="🧭")
-        for pg in PAGES:
-            if os.path.exists(pg["path"]):
-                st.page_link(pg["path"], label=pg["title"], icon=pg["icon"])
-
-# 1) Se existir st.navigation, registre as páginas (ele mesmo cria o menu)
 if has_navigation:
-    # Importante: registre SOMENTE as páginas do diretório /pages para não duplicar a home
-    nav_pages = [st.Page(p["path"], title=p["title"], icon=p["icon"]) for p in PAGES if os.path.exists(p["path"])]
+    nav_pages = [  # inclua a própria Home para aparecer no menu e evitar confusão de página atual
+        st.Page("Menu.py", title="Home", icon="🧭"),
+        *[st.Page(p["path"], title=p["title"], icon=p["icon"]) for p in PAGES if os.path.exists(p["path"])],
+    ]
     st.navigation(pages=nav_pages)
 else:
-    # 2) Fallback usando st.page_link na sidebar
-    if has_page_link:
-        render_sidebar_links()
-    else:
-        # 3) Fallback "raiz": radio manual para versões bem antigas
-        with st.sidebar:
-            st.header("Navegação")
-            choices = ["Home"] + [pg["title"] for pg in PAGES if os.path.exists(pg["path"])]
+    # fallback: navegação manual na sidebar
+    with st.sidebar:
+        st.header("Navegação")
+        if has_page_link:
+            st.page_link("Menu.py", label="Home", icon="🧭")
+            for p in PAGES:
+                if os.path.exists(p["path"]):
+                    st.page_link(p["path"], label=p["title"], icon=p["icon"])
+        else:
+            # fallback mais antigo
+            choices = ["Home"] + [p["title"] for p in PAGES if os.path.exists(p["path"])]
             choice = st.radio("Ir para:", choices, index=0)
             if choice != "Home":
-                # Não há API nativa; informamos o link para clique
-                sel = next(pg for pg in PAGES if pg["title"] == choice)
+                sel = next(p for p in PAGES if p["title"] == choice)
                 st.markdown(f"[Abrir **{sel['title']}**](/?page={sel['path']})")
 
-# =========================
-# BOTÃO DE AÇÃO
-# =========================
+# -------- botão "Iniciar" com fallbacks reais de navegação
 col1, col2 = st.columns([1, 4])
 with col1:
     go = st.button("➡️ Iniciar - Passo 1 (Upload da Série Temporal)", type="primary")
 
 if go:
-    # Tente o switch_page se existir (novo) e caia para alternativas
     target = f"{PAGES_DIR}/01_Upload.py"
     try:
         if hasattr(st, "switch_page"):
-            st.switch_page(target)
+            st.switch_page(target)  # caminho relativo, exatamente como registrado
         elif has_page_link:
-            # Mostra um link clicável como fallback imediato
-            st.success("Versão do Streamlit sem `switch_page`. Clique abaixo para seguir:")
+            st.success("Clique para seguir para o Upload:")
             st.page_link(target, label="Ir para Upload", icon="📤")
         else:
-            # último recurso: sugerir menu lateral
-            st.info("Não consegui redirecionar automaticamente. Acesse o menu lateral e clique em **Upload**.")
+            # último recurso: ajustar querystring e forçar rerun
+            st.experimental_set_query_params(page=target)
+            st.rerun()
     except Exception as e:
-        st.info("Se o botão não funcionar automaticamente, acesse o menu lateral e clique em **Upload**.")
+        st.info("Se não redirecionar, use o menu lateral e clique em **Upload**.")
         st.caption(f"(Detalhe técnico: {e})")
