@@ -3,42 +3,13 @@
 # Rodar: streamlit run Menu.py
 
 from __future__ import annotations
-from pathlib import Path
 import streamlit as st
 
 st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide")
 
-# --------- MENU LATERAL (sem incluir o próprio Menu.py) ---------
-def exists(p: str) -> bool:
-    return Path(p).exists()
-
-pages_list = []
-# NÃO adicionar Menu.py aqui para não duplicar o conteúdo
-
-if exists("pages/01_Upload.py"):
-    pages_list.append(st.Page("pages/01_Upload.py", title="Upload", icon="📤"))
-if exists("pages/02_Serie_Temporal.py"):
-    pages_list.append(st.Page("pages/02_Serie_Temporal.py", title="Série Temporal", icon="📈"))
-if exists("pages/03_Analise_Detalhada.py"):
-    pages_list.append(st.Page("pages/03_Analise_Detalhada.py", title="Análise Detalhada", icon="🧪"))
-# Previsão pode ser 04_... ou 03_...
-if exists("pages/04_Previsao.py"):
-    pages_list.append(st.Page("pages/04_Previsao.py", title="Previsão", icon="🔮"))
-elif exists("pages/03_Previsao.py"):
-    pages_list.append(st.Page("pages/03_Previsao.py", title="Previsão", icon="🔮"))
-# MPS pode variar nome
-if exists("pages/04_MPS.py"):
-    pages_list.append(st.Page("pages/04_MPS.py", title="MPS", icon="🗓️"))
-elif exists("pages/03_MPS.py"):
-    pages_list.append(st.Page("pages/03_MPS.py", title="MPS", icon="🗓️"))
-elif exists("pages/03_mps.py"):
-    pages_list.append(st.Page("pages/03_mps.py", title="MPS", icon="🗓️"))
-
-NAV = st.navigation(pages=pages_list, position="sidebar", expanded=False)
-
 # -------- Cabeçalho --------
 st.title("🧭 Previsão & PCP")
-st.subheader("Integração entre Modelos de Previsão e Controle da Produção (PCP)")
+st.subheader("Integração entre Modelos de Previsão e Planejamento e Controle da Produção (PCP)")
 
 # -------- Texto principal --------
 st.markdown("""
@@ -55,7 +26,7 @@ Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos *
 ---
 
 ### Principais Outputs  
-- 📈 **Previsão de demanda** para os próximos **6,8 ou 12 meses**, identificando automaticamente o modelo mais adequado à série temporal.  
+- 📈 **Previsão de demanda** para os próximos **6, 8 ou 12 meses**, identificando automaticamente o modelo mais adequado à série temporal.  
 - 🗓️ **MPS** (Master Production Schedule) e 🧩 **MRP** (Material Requirements Planning) interativos.  
 - 📊 **Dashboards executivos** para visualização consolidada dos resultados e apoio à decisão.  
 """)
@@ -75,14 +46,7 @@ with col1:
     go = st.button("➡️ Iniciar - Passo 1 (Upload da Série Temporal)", type="primary")
 
 if go:
-    target = "pages/01_Upload.py"
-    if exists(target):
-        try:
-            st.switch_page(target)
-        except Exception:
-            st.info("Se o botão não funcionar automaticamente, acesse o menu lateral e clique em **Upload**.")
-    else:
-        st.error("Arquivo de Upload não encontrado. Verifique se 'pages/01_Upload.py' existe.")
-
-# Importante: chama a navegação no final
-NAV.run()
+    try:
+        st.switch_page("pages/01_Upload.py")
+    except Exception:
+        st.info("Se o botão não funcionar automaticamente, acesse o menu lateral e clique em **Passo 1 - Upload**.")
