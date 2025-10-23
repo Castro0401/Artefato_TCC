@@ -7,6 +7,18 @@ import streamlit as st
 
 st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide")
 
+st.navigation(
+    pages=[
+        st.Page("pages/01_Upload.py",            title="Upload",            icon="📤"),
+        st.Page("pages/02_Serie_Temporal.py",    title="Série Temporal",    icon="📈"),
+        st.Page("pages/03_Analise_Detalhada.py", title="Análise Detalhada", icon="🧪"),
+        st.Page("pages/04_Previsao.py",          title="Previsão",          icon="🔮"),
+        st.Page("pages/05_MPS.py",               title="MPS",               icon="🗓️"),
+    ],
+    position="sidebar",
+    expanded=False,
+)
+
 # -------- Cabeçalho --------
 st.title("🧭 Previsão & PCP")
 st.subheader("Integração entre Modelos de Previsão e Planejamento e Controle da Produção (PCP)")
@@ -50,3 +62,5 @@ if go:
         st.switch_page("pages/01_Upload.py")
     except Exception:
         st.info("Se o botão não funcionar automaticamente, acesse o menu lateral e clique em **Passo 1 - Upload**.")
+
+st.page_link("pages/01_upload.py", label="Ou clique aqui para abrir o **Passo 1** (Upload)", icon="📤")
