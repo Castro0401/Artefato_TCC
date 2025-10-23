@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 
-st.set_page_config(page_title="Série Temporal — Análise Exploratória", page_icon="📈", layout="wide")
 st.title("📈 Série Temporal — Análise Exploratória")
 
 # --- guarda de etapa: precisa ter feito o Upload ---

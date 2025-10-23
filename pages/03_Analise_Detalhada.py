@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Análise Detalhada — Testes de Série Temporal", page_icon="🧪", layout="wide")
 st.title("🧪 Análise Detalhada — Testes e Diagnósticos")
 
 # --- guarda: precisa do upload ---

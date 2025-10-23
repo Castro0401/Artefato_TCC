@@ -9,7 +9,6 @@ import streamlit as st
 # ---------------------------------------------------------------------
 # Configuração da página
 # ---------------------------------------------------------------------
-st.set_page_config(page_title="MPS — Plano Mestre de Produção", page_icon="🗓️", layout="wide")
 st.title("🗓️ MPS — Plano Mestre de Produção (mensal)")
 
 # ---------------------------------------------------------------------

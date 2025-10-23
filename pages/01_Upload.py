@@ -4,7 +4,6 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Passo 1 • Upload da Série", page_icon="📤", layout="wide")
 st.title("📤 Passo 1: Upload da Série temporal do produto a ser analisado")
 
 st.markdown("""
