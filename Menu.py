@@ -11,7 +11,7 @@ st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide"
 # =========================
 # Registre somente as páginas do diretório /pages.
 # Não inclua este próprio arquivo para não duplicar o conteúdo da home.
-NAV = st.navigation(
+st.navigation(
     pages=[
         st.Page("pages/01_Upload.py",            title="Upload",            icon="📤"),
         st.Page("pages/02_Serie_Temporal.py",    title="Série Temporal",    icon="📈"),
@@ -67,7 +67,4 @@ with col1:
         except Exception:
             st.info("Se não abrir automaticamente, use o menu lateral: **Upload**.")
 
-# =========================
-# Executa a navegação (deixe por último)
-# =========================
-NAV.run()
+
