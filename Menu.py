@@ -68,18 +68,3 @@ if go:
         st.info("Não foi possível redirecionar automaticamente. Use o menu lateral e clique em **Upload**.")
         st.caption(f"(Detalhe técnico: {e})")
 
-# =========================
-# Notas importantes
-# =========================
-# 1) Não use st.navigation em nenhum arquivo.
-# 2) Deixe st.set_page_config apenas neste Menu.py.
-# 3) Garanta estrutura:
-#    /SeuProjeto
-#      Menu.py
-#      /pages
-#        01_Upload.py
-#        02_Serie_Temporal.py
-#        03_Analise_Detalhada.py
-#        04_Previsao.py
-#        05_MPS.py
-# 4) Rode a partir da raiz do projeto: streamlit run Menu.py

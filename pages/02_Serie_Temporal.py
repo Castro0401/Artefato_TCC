@@ -16,11 +16,6 @@ if "ts_df_norm" not in st.session_state:
 # ---------------------------------------------------------------------
 # 0) Entrada (ds, y) do Passo 1
 # ---------------------------------------------------------------------
-if "ts_df_norm" not in st.session_state:
-    st.warning("Preciso da série do Passo 1 (Upload).")
-    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
-    st.stop()
-
 df = st.session_state["ts_df_norm"].copy()  # colunas: ds (ex.: 'Set/25'), y (quantidade)
 
 # ---------------------------------------------------------------------
@@ -82,9 +77,11 @@ else:
 # 1) Indicadores descritivos (usando y_filled)
 # ---------------------------------------------------------------------
 n = len(df_full)
-n_missing = int(y.isna().sum())                  # faltantes do original (transparência)
-pct_missing = 100 * n_missing / n
-n_zeros = int((y_filled == 0).sum())             # zeros após imputação
+n_missing = int(y.isna().sum())                        # faltantes do original (transparência)
+pct_missing = 100 * n_missing / n if n else 0
+n_zeros_orig = int((y == 0).sum())                     # zeros na série ORIGINAL
+pct_zeros = 100 * n_zeros_orig / n if n else 0
+n_zeros = int((y_filled == 0).sum())                   # zeros após imputação
 
 mean = float(y_filled.mean())
 median = float(y_filled.median())
@@ -119,12 +116,13 @@ k4.metric("Mín / Máx", f"{min_:.0f} / {max_:.0f}" if min_==min_ and max_==max_
 k5.metric("CV (%)", f"{cv:.1f}" if np.isfinite(cv) else "—")
 k6.metric("Crescimento (~%)", f"{cagr:.1f}" if cagr==cagr else "—")
 
-# Linha 2 — alinhada às MESMAS 6 colunas da linha 1
+# Linha 2 — agora com Zeros (orig.) ANTES de Faltas (orig.)
 k1b, k2b, k3b, k4b, k5b, k6b = st.columns(6)
-k1b.metric("Observações (meses)", f"{n}")                             # abaixo de Média
-k2b.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")     # abaixo de Mediana
-k3b.metric("Zeros (após imputação)", f"{n_zeros}")                     # abaixo de Desv. Padrão
-# (k4b, k5b, k6b deixados intencionalmente vazios para manter alinhamento)
+k1b.metric("Observações (meses)", f"{n}")
+k2b.metric("Zeros (orig.)", f"{n_zeros_orig} ({pct_zeros:.1f}%)")
+k3b.metric("Faltas (orig.)", f"{n_missing} ({pct_missing:.1f}%)")
+k4b.metric("Zeros (após imputação)", f"{n_zeros}")  # opcional; remova se não quiser exibir
+# (k5b e k6b vazios para manter alinhamento)
 
 st.caption(
     "CV = desvio padrão / média. Crescimento (~%) compara médias do início e do fim da série para suavizar ruído."
@@ -182,7 +180,7 @@ with colR:
 st.subheader("Tendência e Sazonalidade")
 try:
     from statsmodels.tsa.seasonal import seasonal_decompose
-    y_clean = y_filled  # já sem NaN após imputação
+    y_clean = y_filled
     result = seasonal_decompose(y_clean, model="additive", period=12, extrapolate_trend="freq")
 
     ts_index = df_full["ts"]
@@ -230,7 +228,7 @@ if len(outliers_df):
     st.dataframe(outliers_df, use_container_width=True, height=160)
 
 # ---------------------------------------------------------------------
-# 6) Próximo passo: Análise detalhada (técnica) ou Previsão
+# 6) Próximo passo
 # ---------------------------------------------------------------------
 st.divider()
 st.markdown(
@@ -247,13 +245,12 @@ with col_btn:
     go_next = st.button("Continuar", type="primary")
 
 ROBUST_PAGE   = "pages/03_Analise_Detalhada.py"
-PREVISAO_PAGE = "pages/04_Previsao.py"   
+PREVISAO_PAGE = "pages/04_Previsao.py"
 
 if go_next:
     target = ROBUST_PAGE if want_robust else PREVISAO_PAGE
     try:
         st.switch_page(target)
     except Exception:
-        # fallback seguro caso esteja rodando em modo sem multipage
         st.info("Abrindo o próximo passo pelo menu lateral.")
         st.page_link(target, label="Abrir próxima página")
