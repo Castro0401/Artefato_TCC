@@ -45,7 +45,7 @@ fcst = st.session_state["forecast_df"].copy()[["ds", "y"]]
 horizon = int(st.session_state["forecast_h"])
 labels = fcst["ds"].tolist()
 
-st.caption(f"🔗 Horizonte atual vindo da **Previsão**: **{horizon} mês(es)**.")
+st.caption(f"🔗 Horizonte atual vindo da **Previsão**: **{horizon} meses**.")
 
 # ---------------------------------------------------------------------
 # 1) Parâmetros
