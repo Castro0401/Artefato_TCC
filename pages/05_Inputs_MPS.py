@@ -126,7 +126,7 @@ orders_df = pd.DataFrame({"ds": labels, "y": orders_row_df.loc["Em carteira"].as
 # =========================
 # 5) CUSTOS (opcional para páginas futuras)
 # =========================
-st.subheader("5) Custos (para consolidação — opcional)")
+st.subheader("5) Custos")
 c9, c10, c11, c12 = st.columns(4)
 with c9:
     unit_cost = st.number_input("Custo unitário (R$)", min_value=0.0, value=float(get("unit_cost", 0.0)), step=10.0)
