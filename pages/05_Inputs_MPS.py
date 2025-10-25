@@ -163,10 +163,6 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
 
-# Preview
-st.subheader("Prévia dos inputs atuais")
-preview = pd.DataFrame([st.session_state.get("mps_inputs", {})]).T.rename(columns={0: "valor"})
-st.dataframe(preview, use_container_width=True, height=280)
 
 st.divider()
 st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)", icon="🗓️")
