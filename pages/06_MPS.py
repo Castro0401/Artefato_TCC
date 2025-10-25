@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 # (ajuste o caminho da sua página final)
-CONCLUSAO_PAGE = "pages/07_Conclusao.py"
+CONCLUSAO_PAGE = "pages/07_Dashboard_Conclusao.py"
 
 st.title("🗓️ 06_MPS — Plano Mestre de Produção (mensal)")
 
