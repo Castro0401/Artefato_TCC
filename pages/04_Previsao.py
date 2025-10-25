@@ -151,9 +151,9 @@ st.info(
 # Navegação: apenas 1 botão (à esquerda)
 # ---------------------------------------------------------------------
 st.divider()
-go_mps = st.button("➡️ Usar esta previsão e ir para o MPS", type="primary")
+go_mps = st.button("➡️ Usar esta previsão e ir para configuração do MPS", type="primary")
 if go_mps:
     try:
-        st.switch_page("pages/05_MPS.py")
+        st.switch_page("pages/05_Inputs_MPS.py")
     except Exception:
-        st.info("Previsão salva! Abra o **MPS** pelo menu lateral.")
+        st.info("Previsão salva! Abra o a parte de **Input para MPS** pelo menu lateral.")
