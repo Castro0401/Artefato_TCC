@@ -151,7 +151,7 @@ st.info(
 # Navegação: apenas 1 botão (à esquerda)
 # ---------------------------------------------------------------------
 st.divider()
-go_mps = st.button("➡️ Usar esta previsão e ir para configuração do MPS", type="primary")
+go_mps = st.button("➡️ Usar esta previsão e ir para configuração dos Inputs do MPS", type="primary")
 if go_mps:
     try:
         st.switch_page("pages/05_Inputs_MPS.py")
