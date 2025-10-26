@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 # (ajuste o caminho da sua página final)
-CONCLUSAO_PAGE = "pages/07_Dashboard_Conclusao.py"
+CONCLUSAO_PAGE = "pages/07_Conclusao.py"
 
 st.title("🗓️ 06_MPS — Plano Mestre de Produção (mensal)")
 
@@ -38,9 +38,9 @@ if "mps_inputs" not in st.session_state:
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from core.mps import compute_mps_monthly  # noqa: E402
+from core.mps import compute_mps_monthly  # usa o core/mps.py atualizado
 
-# -------- Dados de base --------
+# -------- Dados / Inputs --------
 fcst = st.session_state["forecast_df"].copy()[["ds", "y"]]
 horizon = int(st.session_state["forecast_h"])
 labels = fcst["ds"].tolist()
@@ -88,7 +88,7 @@ if auto_ss and len(labels) > 0:
         ss_const = int(np.ceil(z * sigma_abs * np.sqrt(max(lead_time, 1))))
         ss_series = pd.Series([ss_const] * len(labels), index=labels, name="ss")
 
-# -------- Chamada MPS (segura para versões do core sem safety_stock_series) --------
+# -------- Chamada MPS (segura para versões antigas) --------
 # Fallback: média do SS mensal vira 'safety_stock' tradicional
 if auto_ss and ss_series is not None:
     safety_stock_for_core = int(np.ceil(ss_series.mean()))
@@ -101,11 +101,12 @@ base_params = dict(
     safety_stock=int(safety_stock_for_core),
     lead_time=int(lead_time),
     initial_inventory=int(initial_inventory),
-    scheduled_receipts={},         # pode integrar depois
+    scheduled_receipts={},
     firm_customer_orders=orders_df,
+    frozen_range=frozen_range,   # envia o intervalo de congelamento para o core
 )
 
-# Passa a série só se o core declarar esse parâmetro
+# Passa a série só se o core declarar esse parâmetro (por segurança)
 accepts_series = "safety_stock_series" in inspect.signature(compute_mps_monthly).parameters
 if auto_ss and ss_series is not None and accepts_series:
     mps_df = compute_mps_monthly(

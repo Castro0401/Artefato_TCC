@@ -1,8 +1,8 @@
-# mps_monthly_layout_savepath.py
-# MPS mensal (não semanal) com salvamento FIXO em:
-#   C:\Users\vitor\OneDrive\TCC\Códigos VSCODE\MRP e MPS
-#
-# Requer: openpyxl  ->  python -m ensurepip --upgrade  &&  python -m pip install openpyxl
+# core/mps.py
+# MPS mensal (não semanal) com opção de:
+# - Estoque de segurança variável por mês (safety_stock_series)
+# - Congelamento de horizonte (frozen_range)
+# Mantém retrocompatibilidade com chamadas antigas.
 
 from __future__ import annotations
 import math, re
@@ -13,7 +13,6 @@ import numpy as np
 
 # ====== CAMINHO DE SAÍDA FIXO (ajuste se necessário) ======
 OUTPUT_DIR = Path(r"C:\Users\vitor\OneDrive\TCC\Códigos VSCODE\MRP e MPS")
-
 
 # ======================= Helpers de período mensal =======================
 
@@ -56,7 +55,6 @@ def _label_pt(period: pd.Period) -> str:
     yy = str(period.year)[-2:]
     return f"{mon}/{yy}"
 
-
 # ======================= Cálculo do MPS (mensal) =======================
 
 def compute_mps_monthly(
@@ -69,12 +67,22 @@ def compute_mps_monthly(
     initial_inventory: int = 0,
     scheduled_receipts: Optional[Dict[Union[str, pd.Period], int]] = None,  # {"Set/25": qtd, ...}
     firm_customer_orders: Optional[pd.DataFrame] = None,  # colunas: ds, y  (opcional)
+
+    # -------- NOVOS PARÂMETROS OPCIONAIS (retrocompatíveis) --------
+    safety_stock_series: Optional[Iterable[int]] = None,       # SS por mês (mesmo T do horizonte)
+    frozen_range: Optional[Tuple[Union[str, pd.Period], Union[str, pd.Period]]] = None,  # intervalo inclusivo
 ) -> pd.DataFrame:
     """
     Retorna DataFrame com:
       period (Period[M]), period_label, gross_requirements, scheduled_receipts,
       on_hand_begin, net_requirements, planned_order_receipts,
       planned_order_releases, projected_on_hand_end, atp (se houver pedidos).
+
+    NOVO:
+      - safety_stock_series: se fornecido, aplica SS específico por mês (senão usa safety_stock fixo).
+      - frozen_range: intervalo (inclusive) de períodos 'congelados' (não planeja recebimentos nesses buckets).
+        Política adotada: CONGELAR RECEBIMENTOS no intervalo (planned_order_receipts = 0). Recebimentos agendados (scheduled_receipts) continuam válidos.
+        Efeito: se faltar estoque dentro do fence, a compensação acontece fora dele.
     """
     if not {"ds", "y"}.issubset(df_forecast.columns):
         raise ValueError("df_forecast deve ter colunas: ds, y")
@@ -102,7 +110,7 @@ def compute_mps_monthly(
                        .groupby("period")["y"].sum())
         cust = [int(round(cust_series.get(p, 0))) for p in periods]
 
-    # validação parâmetros
+    # validação parâmetros básicos
     if lot_policy.upper() not in ("L4L", "FX"):
         raise ValueError("lot_policy deve ser 'L4L' ou 'FX'")
     lot_size = max(1, int(lot_size))
@@ -110,23 +118,53 @@ def compute_mps_monthly(
     lead_time = max(0, int(lead_time))
     on_hand = int(initial_inventory)
 
+    # ---------- SS por mês (se fornecido) ----------
+    ss_by_idx: Optional[List[int]] = None
+    if safety_stock_series is not None:
+        arr = list(map(lambda x: max(0, int(x)), safety_stock_series))
+        if len(arr) != T:
+            raise ValueError(f"safety_stock_series deve ter comprimento {T} (recebi {len(arr)})")
+        ss_by_idx = arr
+
+    # ---------- Índices congelados (se fornecido) ----------
+    frozen_idx: set[int] = set()
+    if frozen_range is not None:
+        f0 = _to_period_m(frozen_range[0])
+        f1 = _to_period_m(frozen_range[1])
+        fmin, fmax = (f0, f1) if f0 <= f1 else (f1, f0)
+        for i, p in enumerate(periods):
+            if fmin <= p <= fmax:
+                frozen_idx.add(i)
+
     rows = []
-    por = [0]*T
-    pol = [0]*T
+    por = [0]*T   # planned_order_receipts por período i
+    pol = [0]*T   # planned_order_releases por período i (após deslocamento LT)
 
     for i in range(T):
         gross = int(y_fore[i])
         rec_sched = int(sr_idx.get(i, 0))
         on_hand_begin = on_hand + rec_sched
 
-        net = 0
-        if on_hand_begin - gross < safety_stock:
-            net = safety_stock - (on_hand_begin - gross)
-            planned = net if lot_policy.upper() == "L4L" else int(math.ceil(net/lot_size)*lot_size)
-        else:
-            planned = 0
+        # SS efetivo do mês (se existir série) ou SS fixo
+        ss_eff = ss_by_idx[i] if ss_by_idx is not None else safety_stock
 
-        projected_end = on_hand_begin - gross + planned
+        # Política de congelamento adotada: CONGELAR RECEBIMENTOS dentro do intervalo
+        if i in frozen_idx:
+            planned = 0
+            # Apenas para relatório: quanto "faltaria" para atingir SS
+            net = max(0, ss_eff - (on_hand_begin - gross))
+            projected_end = on_hand_begin - gross + planned
+        else:
+            net = 0
+            if on_hand_begin - gross < ss_eff:
+                net = ss_eff - (on_hand_begin - gross)
+                if lot_policy.upper() == "L4L":
+                    planned = net
+                else:
+                    planned = int(math.ceil(net / lot_size) * lot_size)
+            else:
+                planned = 0
+            projected_end = on_hand_begin - gross + planned
 
         por[i] = planned
         rows.append({
@@ -162,7 +200,6 @@ def compute_mps_monthly(
         cols.append("atp")
     return df[cols]
 
-
 def _compute_atp_monthly(df: pd.DataFrame, customer_orders: List[int]) -> pd.DataFrame:
     """ATP mensal com os mesmos princípios bucket-a-bucket."""
     T = len(df)
@@ -189,7 +226,6 @@ def _compute_atp_monthly(df: pd.DataFrame, customer_orders: List[int]) -> pd.Dat
     out = df.copy()
     out["atp"] = atp
     return out
-
 
 # ======================= Exportação Excel (layout mensal) =======================
 
@@ -328,11 +364,9 @@ def export_mps_to_excel_monthly(
     wb.save(str(out_path))
     return str(out_path)
 
-
 # ======================= Demonstração rápida =======================
-
 if __name__ == "__main__":
-    # Previsão mensal de Set/25 a Fev/26 (exemplo)
+    # Exemplo simples
     df_forecast = pd.DataFrame({
         "ds": ["Set/25", "Out/25", "Nov/25", "Dez/25", "Jan/26", "Fev/26"],
         "y":  [300,      300,      300,      300,      350,      350     ]
@@ -343,6 +377,9 @@ if __name__ == "__main__":
         "y":  [280,       120,       40,        0]
     })
 
+    # SS variável (apenas para demo): 6 valores, um por mês
+    ss_series_demo = [50, 70, 50, 60, 80, 80]
+
     params = dict(
         lot_policy="FX",
         lot_size=150,
@@ -350,16 +387,13 @@ if __name__ == "__main__":
         lead_time=1,             # 1 mês
         initial_inventory=55,
         scheduled_receipts={},   # ex.: {"Jan/26": 50}
+        safety_stock_series=ss_series_demo,
+        frozen_range=("Out/25", "Nov/25"),   # exemplo de fence
     )
 
     mps = compute_mps_monthly(
         df_forecast,
-        lot_policy=params["lot_policy"],
-        lot_size=params["lot_size"],
-        safety_stock=params["safety_stock"],
-        lead_time=params["lead_time"],
-        initial_inventory=params["initial_inventory"],
-        scheduled_receipts=params["scheduled_receipts"],
+        **params,
         firm_customer_orders=df_orders,
     )
 
@@ -371,6 +405,5 @@ if __name__ == "__main__":
         initial_inventory=params["initial_inventory"],
         forecast_df=df_forecast,
         orders_df=df_orders,
-        # caminho fixo já é o default: output_dir=OUTPUT_DIR
     )
     print(f"Gerado em: {out}")
