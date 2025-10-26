@@ -136,14 +136,31 @@ display_tbl = pd.DataFrame(
 st.subheader("📅 MPS — visualização mensal (somente leitura)")
 st.dataframe(display_tbl, use_container_width=True, height=300)
 
-# Parâmetros aplicados (resumo)
+# Parâmetros aplicados (resumo) — versão compacta e sem truncar
 st.subheader("Parâmetros aplicados")
-p1, p2, p3, p4, p5 = st.columns(5)
-p1.metric("Política", "Lote Fixo (FX)" if lot_policy == "FX" else "Lote-a-Lote (L4L)")
-p2.metric("Tamanho do lote", f"{lot_size}")
-p3.metric("Estoque inicial", f"{initial_inventory}")
-p4.metric("Lead time (meses)", f"{lead_time}")
-p5.metric("SS automático", "Sim" if auto_ss else "Não")
+
+# Estilos simples para KPIs compactos
+st.markdown("""
+<style>
+.kpi {display:flex; flex-direction:column; gap:2px;}
+.kpi small {color:#6b7280; font-size:0.85rem;}
+.kpi .value {font-size:1.6rem; font-weight:600; line-height:1.1;}
+.kpi .value.sm {font-size:1.2rem;} /* valor menor para a Política */
+</style>
+""", unsafe_allow_html=True)
+
+policy_label = "Lote Fixo (FX)" if lot_policy == "FX" else "Lote-a-Lote (L4L)"
+lot_size_display = "Variável" if lot_policy == "L4L" else f"{lot_size}"
+
+c1, c2, c3, c4, c5 = st.columns([1.6, 1, 1, 1, 1])
+
+c1.markdown(f'<div class="kpi"><small>Política</small><div class="value sm">{policy_label}</div></div>', unsafe_allow_html=True)
+c2.markdown(f'<div class="kpi"><small>Tamanho do lote</small><div class="value">{lot_size_display}</div></div>', unsafe_allow_html=True)
+c3.markdown(f'<div class="kpi"><small>Estoque inicial</small><div class="value">{initial_inventory}</div></div>', unsafe_allow_html=True)
+c4.markdown(f'<div class="kpi"><small>Lead time (meses)</small><div class="value">{lead_time}</div></div>', unsafe_allow_html=True)
+c5_mark = "Sim" if auto_ss else "Não"
+c5.markdown(f'<div class="kpi"><small>SS automático</small><div class="value">{c5_mark}</div></div>', unsafe_allow_html=True)
+
 st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
 
 # -------- Exportação Excel --------
@@ -167,14 +184,6 @@ def to_excel_bytes(
     buf.seek(0)
     return buf.getvalue()
 
-st.download_button(
-    "⬇️ Baixar MPS (Excel)",
-    data=to_excel_bytes(display_tbl, fcst, mps_df, orders_df, ss_series),
-    file_name=f"MPS_mensal_h{horizon}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
-
-st.divider()
 
 # -------- Navegação final --------
 st.download_button(
