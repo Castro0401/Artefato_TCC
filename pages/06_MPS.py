@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 # (ajuste o caminho da sua página final)
-CONCLUSAO_PAGE = "pages/07_Conclusao.py"
+CONCLUSAO_PAGE = "pages/07_Dashboard_Conclusao.py"
 
 st.title("🗓️ 06_MPS — Plano Mestre de Produção (mensal)")
 
@@ -177,6 +177,16 @@ st.download_button(
 st.divider()
 
 # -------- Navegação final --------
+st.download_button(
+    "⬇️ Baixar MPS (Excel)",
+    data=to_excel_bytes(display_tbl, fcst, mps_df, orders_df, ss_series),
+    file_name=f"MPS_mensal_h{horizon}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
+st.divider()
+
+# Navegação final: voltar para Inputs e avançar para Conclusão
 c_back, c_next = st.columns(2)
 with c_back:
     st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")
