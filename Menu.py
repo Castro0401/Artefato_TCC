@@ -11,9 +11,9 @@ def home_page():
 
     st.markdown("""
     ### O que é  
-    Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***,
-    integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita a criação de **dashboards executivos**.
-    ---
+    Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***, integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita a criação de **dashboards executivos** que auxiliam a **análise de resultados** e a **tomada de decisão** de forma simples e visual.
+
+---
     ### Benefícios
     - **Previsões consistentes** com métodos validados  
     - **Integração automática** entre previsão e MPS/MRP  
