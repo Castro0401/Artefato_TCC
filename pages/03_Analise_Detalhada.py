@@ -199,7 +199,7 @@ st.caption("→ **λ≈0** reforça uso de **log**; λ≈1 sugere não transform
 # =========================================================================
 # Recomendações resumo (bullet points)
 # =========================================================================
-st.subheader("Recomendações (resumo)")
+st.subheader("Recomendações")
 recs = []
 
 # 1) Intermitência

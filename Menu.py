@@ -11,6 +11,22 @@ import os
 st.set_page_config(page_title="Previsão & PCP", page_icon="🧭", layout="wide")
 
 # =========================
+# Menu Lateral
+# =========================
+
+nav = st.navigation([
+    st.Page("Menu.py", title="Início — Previsão & PCP", icon="🧭"),
+    st.Page("pages/01_Upload.py", title="Upload", icon="📤"),
+    st.Page("pages/02_Serie_Temporal.py",    title="Série Temporal", icon="📈"),
+    st.Page("pages/03_Analise_Detalhada.py", title="Análise Detalhada", icon="🔍"),
+    st.Page("pages/04_Previsao.py", title="Previsão", icon="🔮"),
+    st.Page("pages/05_Inputs_MPS.py", title="Inputs do MPS", icon="⚙️"),
+    st.Page("pages/06_MPS.py", title="MPS", icon="🗓️"),
+    st.Page("pages/07_Dashboard_Conclusao.py", title="Dashboard & Conclusão", icon="📊"),
+])
+nav.run()
+
+# =========================
 # Cabeçalho
 # =========================
 st.title("🧭 Previsão & PCP")
