@@ -10,20 +10,23 @@ def home_page():
     st.subheader("Integração entre Modelos de Previsão e PCP")
 
     st.markdown("""
-    ### O que é  
-    Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***, integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita a criação de **dashboards executivos** que auxiliam a **análise de resultados** e a **tomada de decisão** de forma simples e visual.
+        ### O que é  
+        Artefato desenvolvido para **gerar previsões de demanda** a partir de modelos **clássicos e de *Machine Learning***, integrando os resultados às ferramentas tradicionais de **PCP**. O sistema também possibilita a criação de **dashboards executivos** que auxiliam a **análise de resultados** e a **tomada de decisão** de forma simples e visual.
 
----
-    ### Benefícios
-    - **Previsões consistentes** com métodos validados  
-    - **Integração automática** entre previsão e MPS/MRP  
-    - **Fluxo:** 🧾 DADOS → 🤖 PREVER → 🏭 PLANEJAR
-    ---
-    ### Principais outputs
-    - 📈 Previsões (6, 8 ou 12 meses)  
-    - 🗓️ MPS / 🧩 MRP  
-    - 📊 Dashboards executivos
-    """)
+        ---
+
+        ### Benefícios  
+        - **Apoio tecnológico** para geração de previsões consistentes e embasadas em métodos validados na literatura.  
+        - **Integração automática** entre previsão, planejamento (MPS/MRP) e indicadores.  
+        - **Fluxo contínuo e intuitivo:**  🧾 **DADOS → 🤖 PREVER → 🏭 PLANEJAR**.  
+
+        ---
+
+        ### Principais Outputs  
+        - 📈 **Previsão de demanda** para os próximos **6, 8 ou 12 meses**.  
+        - 🗓️ **MPS** (Master Production Schedule) e 🧩 **MRP** interativos.  
+        - 📊 **Dashboards executivos** para visualização consolidada e apoio à decisão.  
+        """)
 
     st.divider()
     st.markdown("### Comece agora")
