@@ -44,7 +44,7 @@ nav = st.navigation([
     st.Page("pages/03_Analise_Detalhada.py",    title="Análise Detalhada",       icon="🔍"),
     st.Page("pages/04_Previsao.py",             title="Previsão",                 icon="🔮"),
     st.Page("pages/05_Inputs_MPS.py",           title="Inputs do MPS",           icon="⚙️"),
-    st.Page("pages/06_MPS.py",                  title="MPS — Plano Mestre",      icon="🗓️"),
+    st.Page("pages/06_MPS.py",                  title="MPS",      icon="🗓️"),
     st.Page("pages/07_Dashboard_Conclusao.py",  title="Dashboard & Conclusão",   icon="📊"),
 ])
 
