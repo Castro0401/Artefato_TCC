@@ -133,7 +133,7 @@ display_tbl = pd.DataFrame(
     columns=labels,
 )
 
-st.subheader("📅 MPS — visualização mensal (somente leitura)")
+st.subheader("📅 MPS — Visualização Mensal")
 st.dataframe(display_tbl, use_container_width=True, height=300)
 
 # Parâmetros aplicados (resumo) — versão compacta e sem truncar

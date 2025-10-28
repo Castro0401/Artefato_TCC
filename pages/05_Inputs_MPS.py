@@ -30,6 +30,7 @@ if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state
 fcst = st.session_state["forecast_df"][["ds", "y"]].copy()
 horizon = int(st.session_state["forecast_h"])
 labels = fcst["ds"].tolist()
+product_name = st.session_state.get("product_name", None)  # <— ADICIONE ESTA LINHA
 st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} mês(es)**.")
 
 # defaults
@@ -42,7 +43,8 @@ def get(k, dv): return defaults.get(k, dv)
 st.subheader("1) Item e políticas padrão")
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    item_name = st.text_input("Item (nome)", value=get("item_name", "Cadeira de ripas"))
+    default_item = get("item_name", product_name if product_name else "Item (sem nome)")
+    item_name = st.text_input("Item (nome)", value=default_item)
 with c2:
     lot_policy_default = st.selectbox(
         "Política padrão", ["Lote Fixo (FX)", "Lote-a-Lote (L4L)"],
