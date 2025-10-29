@@ -1,160 +1,232 @@
 # pages/04_Previsao.py
 from __future__ import annotations
-import numpy as np
+
+import sys
+from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-# ---------------------------------------------------------------------
-# Configuração da página
-# ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Título
+# -----------------------------------------------------------------------------
 st.title("🔮 Passo 2 — Previsão de Demanda")
 
-# ---------------------------------------------------------------------
-# Guarda de etapa: precisa do Upload (Passo 1)
-# ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Guardas de etapa
+# -----------------------------------------------------------------------------
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
     st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
     st.stop()
 
-# ---------------------------------------------------------------------
-# Helpers de data
-# ---------------------------------------------------------------------
-_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-       7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
-_REV_PT = {v: k for k, v in _PT.items()}
+# -----------------------------------------------------------------------------
+# Importa core.pipeline
+# -----------------------------------------------------------------------------
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-def label_pt(ts: pd.Timestamp) -> str:
-    return f"{_PT[ts.month]}/{str(ts.year)[-2:]}"
+try:
+    import core.pipeline as pl
+except Exception as e:
+    st.error(f"Falha ao importar core.pipeline: {e}")
+    st.stop()
 
-def to_period(s: str) -> pd.Period:
-    # converte "Set/25" -> Period('2025-09','M'); datas YYYY-MM-DD também funcionam
+# -----------------------------------------------------------------------------
+# Helpers: converte labels 'Set/25' -> Timestamp MS
+# -----------------------------------------------------------------------------
+_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
+_REV_PT = {v:k for k, v in _PT.items()}
+
+def to_period(label: str) -> pd.Period:
     try:
-        return pd.to_datetime(s, dayfirst=True).to_period("M")
+        return pd.to_datetime(label, dayfirst=True).to_period("M")
     except Exception:
-        mon = s[:3].capitalize()
-        yy = int(s[-2:]) + 2000
-        month_num = _REV_PT.get(mon, None)
-        if month_num is None:
-            raise ValueError(f"Formato de mês inválido: {s}")
-        return pd.Period(freq="M", year=yy, month=month_num)
+        mon = label[:3].capitalize()
+        yy = int(label[-2:]) + 2000
+        m = _REV_PT.get(mon)
+        if m is None:
+            raise ValueError(f"Formato de mês inválido: {label}")
+        return pd.Period(year=yy, month=m, freq="M")
 
-def next_n_months(last_period: pd.Period, n: int) -> list[str]:
-    out, p = [], last_period + 1
-    for _ in range(n):
-        out.append(label_pt(p.to_timestamp()))
-        p += 1
-    return out
+def df_upload_to_pipeline(df_upload: pd.DataFrame) -> pd.DataFrame:
+    tmp = df_upload.copy()
+    tmp["p"] = tmp["ds"].apply(to_period)
+    tmp = tmp.sort_values("p")
+    tmp["ds"] = tmp["p"].dt.to_timestamp(how="start")
+    return tmp[["ds", "y"]].dropna(subset=["ds"])
 
-# ---------------------------------------------------------------------
-# Entrada: série mensal do Passo 1
-# ---------------------------------------------------------------------
-hist = st.session_state["ts_df_norm"].copy()  # ['ds','y'] com labels tipo 'Set/25'
+# -----------------------------------------------------------------------------
+# Sidebar
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.header("⚙️ Configurações")
 
-# ---------------------------------------------------------------------
-# Configuração do modelo (simulado)
-# ---------------------------------------------------------------------
-with st.expander("Configuração do modelo (simulado por enquanto)", expanded=True):
-    # lembrar último horizonte salvo no session_state
     last_h = int(st.session_state.get("forecast_h", 6))
-    options = [6, 8, 12]
-    default_index = options.index(last_h) if last_h in options else 0
+    horizon = st.selectbox("Horizonte (meses)", [6, 8, 12],
+                           index=[6, 8, 12].index(last_h) if last_h in (6,8,12) else 0)
 
-    model_choice = st.selectbox(
-        "Modelo candidato",
-        ["AutoARIMA", "ETS (Holt-Winters)", "Prophet", "XGBoost"],
-        index=0,
-        key="model_choice"
-    )
+    seasonal_period = st.number_input("Período sazonal (m)", 1, 24, 12, step=1)
 
-    horizon = st.selectbox(
-        "Horizonte (meses)",
-        options,
-        index=default_index,
-        key="horizon_sel",
-        help="Escolha 6, 8 ou 12 meses. O MPS usará esse mesmo horizonte."
-    )
+    st.markdown("**Pré-processamentos**")
+    use_log = st.checkbox("Aplicar log + ε (auto)", value=True)
+    use_boot = st.checkbox("Gerar séries sintéticas (bootstrap FPP)", value=True)
 
-# ---------------------------------------------------------------------
-# Simulação da previsão (modelo fictício por enquanto)
-# ---------------------------------------------------------------------
-rng = np.random.default_rng()  # sem semente fixa; gera leve variação
+    if use_boot:
+        st.caption("**Dicas**  \n• Réplicas ↑ → experimentos mais robustos (mais lento)  \n• Bloco ↑ → preserva mais autocorrelação (um pouco mais lento)")
+        n_boot = st.slider("Réplicas (bootstrap)", 1, 100, 20, step=1)
+        block = st.slider("Tamanho do bloco", 3, 48, 24, step=1)
+    else:
+        n_boot, block = 0, 0
 
-# prepara histórico
-hist_work = hist.copy()
-hist_work["p"] = hist_work["ds"].apply(to_period)
-hist_work = hist_work.sort_values("p").reset_index(drop=True)
+    fast_mode = st.toggle("🏎️ Modo rápido", value=False,
+                          help="Reduz o grid (SARIMAX/RF) e limita Bootstrap.")
+    force_full = st.checkbox("Forçar modo completo (pode demorar muito)", value=False)
 
-y = hist_work["y"].astype(float).values
-y_ma = pd.Series(y).rolling(3, min_periods=1).mean().values
-sigma = max(np.std(y - y_ma), 1.0)
+# -----------------------------------------------------------------------------
+# Estimador de carga e auto-limite
+# -----------------------------------------------------------------------------
+def estimate_workload():
+    # tamanhos dos grids atuais do módulo
+    cro = len(getattr(pl, "CROSTON_ALPHAS", [0.1]))
+    sba = len(getattr(pl, "SBA_ALPHAS", [0.1]))
+    tsb = len(getattr(pl, "TSB_ALPHA_GRID", [0.3])) * len(getattr(pl, "TSB_BETA_GRID", [0.3]))
+    rf  = (len(getattr(pl, "RF_LAGS_GRID", [6])) *
+           len(getattr(pl, "RF_N_ESTIMATORS_GRID", [200])) *
+           len(getattr(pl, "RF_MAX_DEPTH_GRID", [None])))
+    sar = (len(getattr(pl, "SARIMA_GRID", {"p":[0],"d":[0],"q":[0],"P":[0],"D":[0],"Q":[0]})["p"]) *
+           len(getattr(pl, "SARIMA_GRID")["d"]) *
+           len(getattr(pl, "SARIMA_GRID")["q"]) *
+           len(getattr(pl, "SARIMA_GRID")["P"]) *
+           len(getattr(pl, "SARIMA_GRID")["D"]) *
+           len(getattr(pl, "SARIMA_GRID")["Q"]))
+    models_per_series = cro + sba + tsb + rf + sar
+    n_series = 1 + (1 if use_log else 0) + (n_boot if use_boot else 0)
+    return models_per_series * n_series
 
-last_p = hist_work["p"].iloc[-1]
-future_labels = next_n_months(last_p, int(horizon))
+work = estimate_workload()
+HARD_LIMIT = 1200  # limiar prático (~minutos em CPU média)
 
-# simula tendência leve + ruído proporcional
-trend = (y_ma[-1] - y_ma[max(len(y_ma) - 4, 0)]) / max(3, len(y_ma) - 1)
-sim_vals, base = [], y_ma[-1]
-for _ in range(int(horizon)):
-    base = base + trend
-    sim_vals.append(max(0, base + rng.normal(0, 0.6 * sigma)))
+# aplica “rápido seguro” automaticamente se necessário
+auto_fast = False
+if (not fast_mode) and (not force_full) and work > HARD_LIMIT:
+    auto_fast = True
 
-forecast_df = pd.DataFrame({"ds": future_labels, "y": np.round(sim_vals).astype(int)})
+def apply_fast_caps():
+    # encolhe grids pesados (sem alterar o arquivo core)
+    pl.CROSTON_ALPHAS[:] = [0.1, 0.3]
+    pl.SBA_ALPHAS[:]      = [0.1, 0.3]
+    pl.TSB_ALPHA_GRID[:]  = [0.3]
+    pl.TSB_BETA_GRID[:]   = [0.3]
+    pl.RF_LAGS_GRID[:]    = [6]
+    pl.RF_N_ESTIMATORS_GRID[:] = [200]
+    pl.RF_MAX_DEPTH_GRID[:]    = [None]
+    pl.SARIMA_GRID["p"] = [0,1]
+    pl.SARIMA_GRID["d"] = [0,1]
+    pl.SARIMA_GRID["q"] = [0,1]
+    pl.SARIMA_GRID["P"] = [0]
+    pl.SARIMA_GRID["D"] = [0,1]
+    pl.SARIMA_GRID["Q"] = [0]
+    # limitar bootstrap
+    return min(n_boot, 5), min(block, 12)
 
-# métricas fake (ilustrativas)
-mape = np.clip(rng.normal(8, 2), 4, 15)
-rmse = max(1.0, rng.normal(25, 8))
+if fast_mode or auto_fast:
+    n_boot, block = apply_fast_caps()
 
-# ---------------------------------------------------------------------
-# Persistência automática para o MPS (auto-commit)
-# ---------------------------------------------------------------------
-st.session_state["forecast_df"] = forecast_df
-st.session_state["forecast_h"] = int(horizon)
-st.session_state["forecast_committed"] = True
-st.session_state["forecast_df_6m"] = forecast_df if horizon == 6 else forecast_df.copy()
+# -----------------------------------------------------------------------------
+# Barra (sem textos) e Execução
+# -----------------------------------------------------------------------------
+bar_slot = st.empty()
+run = st.button("▶️ Rodar previsão", type="primary")
 
-# ---------------------------------------------------------------------
-# Visualizações
-# ---------------------------------------------------------------------
-left, right = st.columns([2, 1])
+def run_with_progress(df_in: pd.DataFrame):
+    bar = bar_slot.progress(0)
+    p = {"v": 0}
 
-with left:
-    st.subheader(f"Histórico + Previsão ({horizon} meses)")
-    hist_plot = hist_work.assign(ts=hist_work["p"].dt.to_timestamp())[["ts", "y"]]
-    last_ts = hist_plot["ts"].iloc[-1]
-    fut_ts = pd.date_range(last_ts + pd.offsets.MonthBegin(1), periods=int(horizon), freq="MS")
-    fut_plot = pd.DataFrame({"ts": fut_ts, "y": forecast_df["y"]})
+    def bump(d=1):
+        p["v"] = min(96, p["v"] + d)
+        bar.progress(p["v"])
 
-    chart_df = pd.concat([
-        hist_plot.assign(tipo="Histórico"),
-        fut_plot.assign(tipo="Previsão")
-    ]).set_index("ts")
+    original_log = pl.log
+    def silent_log(msg: str):
+        # só avança a barra. Não escreve nada.
+        low = msg.lower()
+        if "pipeline iniciado" in low: bump(4)
+        elif "realizando testes da série original" in low: bump(6)
+        elif "transformação log" in low or "log-transformada" in low: bump(6)
+        elif "bootstrap" in low and ("gerando" in low or "réplicas" in low): bump(10)
+        elif "croston" in low or "sba" in low or "tsb" in low: bump(2)
+        elif "randomforest" in low: bump(2)
+        elif "sarimax" in low: bump(2)
+        elif "pipeline finalizado" in low: bump(3)
+        else:
+            bump(1)
+        # mantém o print no stdout para depuração, sem poluir UI
+        try:
+            original_log(msg)
+        except Exception:
+            pass
 
-    st.line_chart(chart_df, x=None, y="y", color="tipo", height=320, use_container_width=True)
-
-with right:
-    st.subheader("Resumo do modelo")
-    st.metric("Modelo escolhido", model_choice)
-    st.metric("Horizonte", f"{horizon} meses")
-    st.metric("MAPE (simulado)", f"{mape:.1f} %")
-    st.metric("RMSE (simulado)", f"{rmse:.1f}")
-
-st.subheader("Previsão (tabela)")
-st.dataframe(forecast_df, use_container_width=True, height=220)
-
-st.info(
-    "Quando o módulo real de previsão estiver pronto, substitua a simulação por "
-    "`run_best_model_monthly(...)` e mantenha `st.session_state['forecast_df']` e "
-    "`st.session_state['forecast_h']`."
-)
-
-# ---------------------------------------------------------------------
-# Navegação: apenas 1 botão (à esquerda)
-# ---------------------------------------------------------------------
-st.divider()
-go_mps = st.button("➡️ Usar esta previsão e ir para configuração dos Inputs do MPS", type="primary")
-if go_mps:
+    pl.log = silent_log
     try:
-        st.switch_page("pages/05_Inputs_MPS.py")
-    except Exception:
-        st.info("Previsão salva! Abra o a parte de **Input para MPS** pelo menu lateral.")
+        df_out = pl.run_full_pipeline(
+            data_input=df_in,
+            sheet_name=None,
+            date_col="ds",
+            value_col="y",
+            horizon=int(horizon),
+            seasonal_period=int(seasonal_period),
+            do_original=True,
+            do_log=bool(use_log),
+            do_bootstrap=bool(use_boot),
+            n_bootstrap=int(n_boot),
+            bootstrap_block=int(block),
+            save_dir=None,
+        )
+        bar.progress(100)
+        return df_out
+    finally:
+        pl.log = original_log
+        bar_slot.empty()
+
+# -----------------------------------------------------------------------------
+# Rodar
+# -----------------------------------------------------------------------------
+if run:
+    try:
+        df_in = df_upload_to_pipeline(st.session_state["ts_df_norm"])
+        with st.spinner("Executando…"):
+            resultados = run_with_progress(df_in)
+
+        champ = resultados.attrs.get("champion", {})
+        st.success("✅ Experimentos concluídos!")
+
+        # KPIs e tabela só após finalizar
+        if champ:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Modelo campeão", str(champ.get("model", "—")))
+            try:
+                c2.metric("sMAPE (%)", f"{float(champ.get('sMAPE', float('nan'))):.2f}")
+            except Exception:
+                c2.metric("sMAPE (%)", "—")
+            try:
+                c3.metric("MAE", f"{float(champ.get('MAE', float('nan'))):.2f}")
+                c4.metric("RMSE", f"{float(champ.get('RMSE', float('nan'))):.2f}")
+            except Exception:
+                pass
+
+        with st.expander("Ver tabela completa de experimentos"):
+            st.dataframe(resultados, use_container_width=True, height=420)
+
+        # estado mínimo p/ próximas páginas
+        st.session_state["forecast_h"] = int(horizon)
+        st.session_state["forecast_committed"] = False
+
+        # aviso se o app precisou “segurar” a carga
+        if auto_fast and not force_full:
+            st.info("Rodei em **modo rápido seguro** porque a carga estimada estava muito alta. "
+                    "Se quiser o conjunto completo, marque **Forçar modo completo** e rode novamente.")
+
+    except Exception as e:
+        bar_slot.empty()
+        st.error(f"Ocorreu um erro durante a execução: {e}")
