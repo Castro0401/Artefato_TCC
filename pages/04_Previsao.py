@@ -27,6 +27,7 @@ except Exception as e:
 
 # ---------- Helpers de data ------------
 _PT2NUM = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
+_NUM2PT = {v:k for k,v in _PT2NUM.items()}
 
 def parse_label_to_timestamp(s: str) -> pd.Timestamp:
     s = str(s).strip()
@@ -41,12 +42,42 @@ def parse_label_to_timestamp(s: str) -> pd.Timestamp:
     except Exception:
         return pd.NaT
 
+def label_pt(ts: pd.Timestamp) -> str:
+    return f"{_NUM2PT[ts.month]}/{str(ts.year)[-2:]}"
+
 def df_labels_to_datetime(df_in: pd.DataFrame) -> pd.DataFrame:
     out = df_in.copy()
     out["ds"] = out["ds"].apply(parse_label_to_timestamp)
     out["y"] = pd.to_numeric(out["y"], errors="coerce")
     out = out.dropna(subset=["ds", "y"]).sort_values("ds").reset_index(drop=True)
     return out
+
+def seasonal_naive_forecast(hist_df: pd.DataFrame, h: int, m: int = 12) -> pd.DataFrame:
+    """
+    Previsão provisória: repete o valor do mesmo mês do ano anterior (sazonal ingênuo).
+    hist_df: ['ds'(Timestamp MS), 'y'(float)]
+    Retorna DataFrame ['ds'(label tipo "Set/25"), 'y'] para h meses à frente.
+    """
+    hist_df = hist_df.sort_values("ds").reset_index(drop=True)
+    if len(hist_df) < m:
+        base = float(hist_df["y"].iloc[-1])
+        fut_ts = pd.date_range(hist_df["ds"].iloc[-1] + pd.offsets.MonthBegin(1), periods=h, freq="MS")
+        return pd.DataFrame({"ds":[label_pt(t) for t in fut_ts], "y":[base]*h})
+
+    # mapa de (mês) -> último valor observado naquele mês (do último ano completo)
+    hist_df["month"] = hist_df["ds"].dt.month
+    last_year = hist_df["ds"].dt.year.max()
+    # preferir ano passado se existir, senão usa os últimos valores por mês
+    ref = hist_df[hist_df["ds"].dt.year == last_year - 1]
+    if ref.empty:
+        ref = hist_df.copy()
+    month_map = ref.dropna(subset=["y"]).groupby("month")["y"].last().to_dict()
+
+    fut_ts = pd.date_range(hist_df["ds"].iloc[-1] + pd.offsets.MonthBegin(1), periods=h, freq="MS")
+    fut_vals = []
+    for t in fut_ts:
+        fut_vals.append(float(month_map.get(t.month, hist_df["y"].iloc[-1])))
+    return pd.DataFrame({"ds":[label_pt(t) for t in fut_ts], "y":fut_vals})
 
 # --------- Sidebar de parâmetros ---------
 with st.sidebar:
@@ -60,14 +91,17 @@ with st.sidebar:
     use_boot = st.checkbox("Usar Bootstrap FPP", value=True)
     if use_boot:
         st.caption("**Bootstrap** — Réplicas: quantas séries sintéticas gerar. "
-                   "Bloco: tamanho do bloco de resíduos reamostrados (preserva autocorrelação).")
+                   "Quanto maior, mais robusto (e mais lento).")
         n_boot = st.slider("Réplicas (n_bootstrap)", 5, 50, 20, step=1)
-        block = st.slider("Tamanho do bloco", 6, 48, 24, step=1)
+        block = 24  # tamanho de bloco fixo para mensal
     else:
         n_boot, block = 0, 24
 
     st.subheader("🏎️ Desempenho")
     fast_mode = st.toggle("Modo rápido (menos combinações)", value=False)
+
+    st.subheader("Visualização")
+    show_experiments = st.toggle("Deseja ver os experimentos?", value=False)
 
 st.info("Clique em **Rodar previsão** para executar os experimentos.")
 
@@ -75,9 +109,9 @@ run_btn = st.button("▶️ Rodar previsão", type="primary")
 
 if run_btn:
     # 1) Normaliza série do Upload
-    hist = st.session_state["ts_df_norm"]
+    hist_labels = st.session_state["ts_df_norm"][["ds","y"]].copy()
     try:
-        df_in = df_labels_to_datetime(hist[["ds", "y"]])
+        df_in = df_labels_to_datetime(hist_labels)
     except Exception as e:
         st.error(f"Erro ao normalizar datas do histórico: {e}")
         st.stop()
@@ -103,22 +137,21 @@ if run_btn:
     with st.spinner("Processando sua previsão…"):
         try:
             resultados = pipe.run_full_pipeline(
-                data_input=df_in,
+                data_input=df_in,  # DataFrame com ds Timestamp + y
                 sheet_name=None, date_col="ds", value_col="y",
                 horizon=int(horizon), seasonal_period=int(seasonal_period),
                 do_original=True, do_log=bool(use_log), do_bootstrap=bool(use_boot),
                 n_bootstrap=int(n_boot) if use_boot else 0,
-                bootstrap_block=int(block) if use_boot else 24,
+                bootstrap_block=int(block),
                 save_dir=None,
             )
         except Exception as e:
             st.error(f"Ocorreu um erro durante a execução: {e}")
             st.stop()
 
-    # 4) Exibição somente após concluir
     st.success("Experimentos concluídos com sucesso! ✅")
 
-    # Painel campeão
+    # 4) Painel campeão
     champ = resultados.attrs.get("champion", {})
     st.subheader("🏆 Modelo campeão")
     c1, c2, c3, c4 = st.columns(4)
@@ -133,29 +166,39 @@ if run_btn:
     except Exception:
         c4.metric("MAE", "-")
 
-    # 5) Tabela robusta (lista de dicionários JSON-safe)
-    st.subheader("Resultados dos experimentos")
-    df = resultados.copy().reset_index(drop=True)
-
-    # força tudo a string/num simples (sem objetos/arrays/Period/etc)
-    def _cell_safe(v):
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            return ""
-        # números ficam números; o resto vira string
-        if isinstance(v, (int, float, np.integer, np.floating)):
-            return float(v) if isinstance(v, np.floating) else int(v) if isinstance(v, np.integer) else v
-        return str(v)
-
-    rows = [{col: _cell_safe(df.iloc[i][col]) for col in df.columns} for i in range(len(df))]
-
-    # passa lista de dicts (totalmente serializável)
-    st.dataframe(rows, use_container_width=True, height=380)
-
-    # guarda estado para próximas páginas
+    # 5) Histórico + Previsão (gráfico)
+    #    Previsão provisória por sazonal ingênuo (até pipeline retornar forecast futuro)
+    forecast_df = seasonal_naive_forecast(df_in[["ds","y"]], h=int(horizon), m=int(seasonal_period))
+    st.session_state["forecast_df"] = forecast_df.copy()
     st.session_state["forecast_h"] = int(horizon)
-    st.session_state["exp_results"] = resultados
-    st.session_state["champion"] = champ
-    st.session_state["forecast_committed"] = False
+    st.session_state["forecast_committed"] = True
+
+    st.subheader(f"Histórico + Previsão ({int(horizon)} meses)")
+    hist_plot = df_in[["ds","y"]].rename(columns={"ds":"ts"}).copy()
+    hist_plot["tipo"] = "Histórico"
+    # construir datas futuras a partir dos labels
+    last_ts = df_in["ds"].max()
+    fut_ts = pd.date_range(last_ts + pd.offsets.MonthBegin(1), periods=int(horizon), freq="MS")
+    fut_plot = pd.DataFrame({"ts": fut_ts, "y": forecast_df["y"], "tipo": "Previsão"})
+    chart_df = pd.concat([hist_plot, fut_plot], ignore_index=True).set_index("ts")
+    st.line_chart(chart_df, x=None, y="y", color="tipo", height=340, use_container_width=True)
+
+    # 6) Experimentos — exibir apenas se usuário quiser
+    if show_experiments:
+        st.subheader("Resultados dos experimentos")
+        df = resultados.copy().reset_index(drop=True)
+
+        # força tudo a string/num simples (sem objetos/arrays/Period/etc)
+        def _cell_safe(v):
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return ""
+            if isinstance(v, (int, float, np.integer, np.floating)):
+                # manter tipo numérico simples
+                return float(v) if isinstance(v, np.floating) else int(v) if isinstance(v, np.integer) else v
+            return str(v)
+
+        rows = [{col: _cell_safe(df.iloc[i][col]) for col in df.columns} for i in range(len(df))]
+        st.dataframe(rows, use_container_width=True, height=380)
 
     st.divider()
     st.page_link("pages/05_Inputs_MPS.py",
