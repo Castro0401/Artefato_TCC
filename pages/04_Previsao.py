@@ -3,200 +3,167 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-# -----------------------------------------------------------------------------
-# Configuração da página
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Config da página
+# ---------------------------------------------------------------------
 st.title("🔮 Passo 2 — Previsão de Demanda")
 
-# -----------------------------------------------------------------------------
-# Guarda de etapa: precisa do Upload (Passo 1)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Guardas de etapa
+# ---------------------------------------------------------------------
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
     st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload", icon="📤")
     st.stop()
 
-# -----------------------------------------------------------------------------
-# Import do pipeline como módulo (core/pipeline.py)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Import seguro do core.pipeline (sem quebrar paths quando rodar via streamlit)
+# ---------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]  # raiz do projeto (onde fica a pasta core/)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:
-    import core.pipeline as pl  # noqa: E402
+    import core.pipeline as pl
 except Exception as e:
-    st.error(
-        "Não consegui importar `core/pipeline.py`. "
-        "Confira se o arquivo existe e se a pasta `core/` tem um `__init__.py`."
-    )
-    st.exception(e)
+    st.error(f"Não consegui importar `core.pipeline`. Erro: {e}")
     st.stop()
 
-# -----------------------------------------------------------------------------
-# Helpers de data
-# -----------------------------------------------------------------------------
-_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Jul",
-       8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
+# ---------------------------------------------------------------------
+# Helpers de data (labels 'Set/25' → Period mensal; Period → Timestamp)
+# ---------------------------------------------------------------------
+_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+       7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
 _REV_PT = {v: k for k, v in _PT.items()}
 
-
-def label_pt(ts: pd.Timestamp) -> str:
-    return f"{_PT[ts.month]}/{str(ts.year)[-2:]}"
-
-
 def to_period(s: str) -> pd.Period:
-    # converte "Set/25" -> Period('2025-09','M'); datas YYYY-MM-DD também funcionam
+    # aceita "Set/25" ou datas YYYY-MM-DD
     try:
         return pd.to_datetime(s, dayfirst=True).to_period("M")
     except Exception:
         mon = s[:3].capitalize()
         yy = int(s[-2:]) + 2000
-        month_num = _REV_PT.get(mon, None)
+        month_num = _REV_PT.get(mon)
         if month_num is None:
             raise ValueError(f"Formato de mês inválido: {s}")
         return pd.Period(freq="M", year=yy, month=month_num)
 
+# ---------------------------------------------------------------------
+# Série histórica do Passo 1 (não alterar o objeto original no session_state)
+# ---------------------------------------------------------------------
+_hist = st.session_state["ts_df_norm"].copy()     # colunas ['ds','y'] com label tipo 'Set/25'
+_hist["p"] = _hist["ds"].apply(to_period)         # Period(M)
+_hist = _hist.sort_values("p").reset_index(drop=True)
 
-def next_n_months(last_period: pd.Period, n: int) -> list[str]:
-    out, p = [], last_period + 1
-    for _ in range(n):
-        out.append(label_pt(p.to_timestamp()))
-        p += 1
-    return out
-
-
-# -----------------------------------------------------------------------------
-# Entrada: série mensal do Passo 1
-# Formato guardado no upload: df com ['ds','y'] onde ds é "Set/25", "Out/25", ...
-# -----------------------------------------------------------------------------
-hist = st.session_state["ts_df_norm"].copy()
-hist["p"] = hist["ds"].apply(to_period)
-hist = hist.sort_values("p").reset_index(drop=True)
-
-# -----------------------------------------------------------------------------
-# Sidebar — parâmetros do experimento
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# MENU LATERAL — parâmetros do pipeline
+# ---------------------------------------------------------------------
 with st.sidebar:
-    st.subheader("⚙️ Configurações da previsão")
+    st.header("⚙️ Configurações da previsão")
 
-    # lembrar último horizonte salvo no session_state
+    # Lembrar último horizonte
     last_h = int(st.session_state.get("forecast_h", 6))
-    horizon = st.selectbox(
-        "Horizonte (meses)",
-        [6, 8, 12],
-        index={6: 0, 8: 1, 12: 2}.get(last_h, 0),
-        help="O MPS usará esse mesmo horizonte.",
-    )
+    horizon = st.selectbox("Horizonte (meses)",
+                           [6, 8, 12],
+                           index=[6, 8, 12].index(last_h) if last_h in (6, 8, 12) else 0,
+                           help="Esse horizonte será usado para o holdout do pipeline e para a exibição.")
 
-    seasonal_period = st.number_input(
-        "Período sazonal (m)",
-        min_value=1,
-        max_value=24,
-        value=int(st.session_state.get("seasonal_period", 12)),
-        step=1,
-        help="Para série mensal tipicamente use 12.",
-    )
-    # persistir sem resetar upload
-    st.session_state["seasonal_period"] = int(seasonal_period)
+    seasonal_period = st.number_input("Período sazonal (m)", min_value=1, max_value=24, value=12, step=1)
 
-    st.markdown("---")
-    do_log = st.checkbox("Usar transformação Log + ε (auto)", value=True)
-    do_bootstrap = st.checkbox("Usar Bootstrap FPP", value=True)
+    st.markdown("**Pré-processamentos**")
+    use_log = st.checkbox("Aplicar log + ε (auto)", value=True,
+                          help="Aplica log(y + shift + ε) escolhendo ε para estabilizar a variância; métricas avaliadas na escala original.")
+    use_boot = st.checkbox("Gerar séries sintéticas (bootstrap FPP)", value=True)
 
-    if do_bootstrap:
-        st.caption("**Bootstrap FPP** = Box–Cox (λ MLE) + STL robusta + reamostragem em blocos dos resíduos + inversão.")
-        st.markdown(
-            "_Réplicas:_ quantas séries sintéticas serão geradas para testar robustez.  "
-            "_Tamanho do bloco:_ controla a preservação da autocorrelação nos resíduos; "
-            "valores maiores preservam dependências mais longas."
-        )
-        n_bootstrap = st.slider("Réplicas (n)", min_value=5, max_value=50, value=20, step=1)
-        bootstrap_block = st.slider("Tamanho do bloco", min_value=3, max_value=48, value=24, step=1)
+    if use_boot:
+        st.caption("**Réplicas**: quantas séries sintéticas serão geradas.\n\n"
+                   "**Tamanho do bloco**: controla a preservação da autocorrelação ao reamostrar resíduos.")
+        n_boot = st.slider("Réplicas (bootstrap)", min_value=1, max_value=100, value=20, step=1)
+        block = st.slider("Tamanho do bloco", min_value=3, max_value=48, value=24, step=1)
     else:
-        n_bootstrap = 0
-        bootstrap_block = 0
+        n_boot, block = 0, 0
 
-    st.markdown("---")
-    fast_mode = st.toggle("🏎️ Modo rápido (menos testes)", value=False, help="Desliga o Bootstrap automaticamente e usa grades compactas.")
-    if fast_mode:
-        # acelera: priorize original + log, sem bootstrap
-        do_bootstrap = False
-        n_bootstrap = 0
-        bootstrap_block = 0
+    fast_mode = st.toggle("🏎️ Modo rápido", value=False,
+                          help="Reduz o custo experimental (menos combinações e/ou menos réplicas). "
+                               "Use quando quiser um resultado mais veloz para protótipos.")
 
-    st.markdown("---")
-    run = st.button("▶️ Rodar previsão", type="primary", use_container_width=True)
+# Aplicação do modo rápido (sem alterar a lógica do pipeline; só dosamos parâmetros)
+if fast_mode:
+    # Mantemos log+ε conforme seleção; reduzimos bootstrap e não mexemos na grade interna de SARIMAX/RF.
+    if use_boot:
+        n_boot = min(n_boot, 5)
+        block = min(block, 12)
 
-# -----------------------------------------------------------------------------
-# Execução do pipeline com barra de progresso silenciosa
-# -----------------------------------------------------------------------------
-forecast_df = None
-champion = None
+# ---------------------------------------------------------------------
+# Área de progresso + mensagens (a tabela de previsão fica em branco enquanto roda)
+# ---------------------------------------------------------------------
+progress_ph = st.empty()
+status_box = st.container()
+results_area = st.container()   # onde aparecerão os resultados quando terminar
 
-if run:
-    progress_box = st.container()
-    pbar = progress_box.progress(0, text="Iniciando…")
+# Tabela em branco até terminar
+st.subheader("Previsão (tabela)")
+st.dataframe(pd.DataFrame(columns=["ds", "y"]), use_container_width=True, height=220)
 
-    # mapa de fases -> progresso aproximado
-    phases = {
-        "PIPELINE INICIADO": 0.05,
-        "REALIZANDO TESTES DA SÉRIE ORIGINAL": 0.15,
-        "PREPARANDO TRANSFORMAÇÃO LOG": 0.20,
-        "REALIZANDO TESTES DA SÉRIE LOG": 0.35,
-        "GERAÇÃO DAS RÉPLICAS SINTÉTICAS": 0.40,
-        "RÉPLICAS GERADAS": 0.45,
-        "CROSTON": 0.30,
-        "SBA": 0.40,
-        "TSB": 0.50,
-        "RANDOMFOREST": 0.60,
-        "SARIMAX": 0.75,
-        "CAMPEÃO": 0.92,
-        "PIPELINE FINALIZADO": 1.00,
-    }
+# ---------------------------------------------------------------------
+# Botão para rodar o pipeline
+# ---------------------------------------------------------------------
+run = st.button("▶️ Rodar previsão", type="primary")
 
-    def _progress_from_msg(msg: str) -> float | None:
-        m = str(msg).upper()
-        for key, val in phases.items():
-            if key in m:
-                return val
-        # heurística para pequenos avanços entre logs conhecidos
-        if "PROGRESSO" in m or "RÉPLICA" in m:
-            return min(state["v"] + 0.02, 0.9)
-        return None
+def _make_df_input_from_hist(df_hist: pd.DataFrame) -> pd.DataFrame:
+    """Converte df com Period para Timestamp (MS) para o pipeline."""
+    df = df_hist[["p", "y"]].copy()
+    df["ds"] = df["p"].dt.to_timestamp(how="start")  # Period -> Timestamp
+    return df[["ds", "y"]].dropna(subset=["ds"])
 
-    # estado mutável p/ usar em closures (evita 'nonlocal' no nível de módulo)
-    state = {"v": 0.0}
+# Captura de logs do pipeline para dirigir a barra
+def run_with_progress(df_in: pd.DataFrame):
+    # barra e contador
+    bar = progress_ph.progress(0, text="Inicializando…")
+    prog = {"value": 0}
 
-    def _bar_update(x: float | None, fallback: float = 0.01):
-        if x is None:
-            x = min(state["v"] + fallback, 0.98)
-        if x > state["v"]:
-            state["v"] = x
-            pbar.progress(min(1.0, state["v"]))
+    def tick(step: int = 1, label: str | None = None):
+        prog["value"] = min(95, prog["value"] + step)  # segura até 95%
+        bar.progress(prog["value"], text=label or "Executando…")
 
-    # hook no logger do pipeline
-    pl_log_original = pl.log
+    # intercepta logs do pipeline
+    original_log = pl.log
 
-    def _hooked_log(msg: str):
+    def ui_log(msg: str):
+        # atualiza mensagens e barra com pequenos avanços
+        status_box.write(msg)
+        # heurística leve por etapas:
+        lower = msg.lower()
+        if "pipeline iniciado" in lower or "realizando testes da série original" in lower:
+            tick(5, "Carregando e preparando dados…")
+        elif "transformação log" in lower or "log-transformada" in lower:
+            tick(5, "Aplicando log + ε…")
+        elif "bootstrap" in lower and ("gerando" in lower or "réplicas" in lower):
+            tick(10, "Gerando réplicas (bootstrap)…")
+        elif "croston" in lower or "sba" in lower or "tsb" in lower:
+            tick(3, "Modelos para demanda intermitente…")
+        elif "randomforest" in lower:
+            tick(3, "Random Forest…")
+        elif "sarimax" in lower:
+            tick(3, "SARIMAX…")
+        elif "concluídos testes" in lower or "pipeline finalizado" in lower:
+            tick(5, "Finalizando…")
+        else:
+            tick(1, "Executando…")
         try:
-            _bar_update(_progress_from_msg(msg))
+            original_log(msg)  # ainda imprime no stdout, se desejar
         except Exception:
             pass
-        pl_log_original(msg)
 
-    pl.log = _hooked_log
-
+    # injeta o logger de UI
+    pl.log = ui_log
     try:
-        # prepara df de entrada no formato aceito pelo pipeline (ds,y mensais)
-        df_in = hist[["p", "y"]].rename(columns={"p": "ds"})
-        # roda o pipeline
-        resultados = pl.run_full_pipeline(
+        # chamada do pipeline
+        df_out = pl.run_full_pipeline(
             data_input=df_in,
             sheet_name=None,
             date_col="ds",
@@ -204,109 +171,49 @@ if run:
             horizon=int(horizon),
             seasonal_period=int(seasonal_period),
             do_original=True,
-            do_log=bool(do_log),
-            do_bootstrap=bool(do_bootstrap),
-            n_bootstrap=int(n_bootstrap) if do_bootstrap else 0,
-            bootstrap_block=int(bootstrap_block) if do_bootstrap else 0,
-            save_dir=None,
+            do_log=bool(use_log),
+            do_bootstrap=bool(use_boot),
+            n_bootstrap=int(n_boot),
+            bootstrap_block=int(block),
+            save_dir=None,   # você pode plugar um diretório se quiser exportar CSV/XLSX direto
         )
-        _bar_update(0.99)
-        _bar_update(1.0)
-
-        # Campeão e sMAPE reais vindos do pipeline
-        champion = resultados.attrs.get("champion", {})
-        # Observação: o pipeline não entrega a série prevista; abaixo montamos
-        # uma projeção simples (apenas para visual) até você estender o pipeline.
-    except Exception as e:
-        pbar.progress(0.0, text="Erro ao rodar previsão.")
-        st.exception(e)
+        # fecha barra em 100%
+        bar.progress(100, text="Concluído!")
+        return df_out
     finally:
-        # restaura logger e remove barra
-        pl.log = pl_log_original
-        progress_box.empty()
+        # restaura logger original e limpa barra
+        pl.log = original_log
+        progress_ph.empty()
 
-# -----------------------------------------------------------------------------
-# Geração de uma previsão visual (placeholder) e UI de resultados
-# -----------------------------------------------------------------------------
-# Mesmo que não clique em "Rodar", deixamos a visualização pronta com horizonte atual
-hist_work = hist.copy()
-y = hist_work["y"].astype(float).values
-y_ma = pd.Series(y).rolling(3, min_periods=1).mean().values
-sigma = max(np.std(y - y_ma), 1.0)
-last_p = hist_work["p"].iloc[-1]
-future_labels = next_n_months(last_p, int(horizon))
-
-# projeção simples (placeholder visual)
-trend = (y_ma[-1] - y_ma[max(len(y_ma) - 4, 0)]) / max(3, len(y_ma) - 1)
-sim_vals, base = [], y_ma[-1]
-rng = np.random.default_rng(123)
-for _ in range(int(horizon)):
-    base = base + trend
-    sim_vals.append(max(0, base + rng.normal(0, 0.15 * sigma)))
-forecast_df = pd.DataFrame({"ds": future_labels, "y": np.round(sim_vals, 0).astype(int)})
-
-# Persistência para MPS
-st.session_state["forecast_df"] = forecast_df
-st.session_state["forecast_h"] = int(horizon)
-st.session_state["forecast_committed"] = True
-if horizon == 6:
-    st.session_state["forecast_df_6m"] = forecast_df.copy()
-
-# -----------------------------------------------------------------------------
-# Visualizações
-# -----------------------------------------------------------------------------
-left, right = st.columns([2, 1])
-
-with left:
-    st.subheader(f"Histórico + Previsão ({horizon} meses)")
-    hist_plot = hist_work.assign(ts=hist_work["p"].dt.to_timestamp())[["ts", "y"]]
-    last_ts = hist_plot["ts"].iloc[-1]
-    fut_ts = pd.date_range(last_ts + pd.offsets.MonthBegin(1), periods=int(horizon), freq="MS")
-    fut_plot = pd.DataFrame({"ts": fut_ts, "y": forecast_df["y"]})
-
-    chart_df = pd.concat(
-        [hist_plot.assign(tipo="Histórico"), fut_plot.assign(tipo="Previsão")]
-    ).set_index("ts")
-
-    st.line_chart(chart_df, x=None, y="y", color="tipo", height=340, use_container_width=True)
-
-with right:
-    st.subheader("Resumo do experimento")
-    if champion:
-        smape = champion.get("sMAPE", None)
-        mae = champion.get("MAE", None)
-        rmse = champion.get("RMSE", None)
-        st.metric("sMAPE (campeão)", f"{smape:.2f} %" if smape is not None else "—")
-        st.metric("Modelo", f"{champion.get('model','—')}")
-        st.caption(
-            f"Pré-processamento: **{champion.get('preprocess','—')}**  \n"
-            f"Parâmetros: {champion.get('model_params','—')}"
-        )
-        if mae is not None and rmse is not None:
-            st.caption(f"MAE={mae:.2f} | RMSE={rmse:.2f}")
-    else:
-        st.info("Rode o experimento para ver o campeão e a sMAPE.")
-
-st.subheader("Previsão (tabela)")
-st.dataframe(forecast_df, use_container_width=True, height=240)
-
-st.caption(
-    "Obs.: a série prevista exibida é um **placeholder visual**. "
-    "O pipeline atual escolhe o melhor modelo e reporta métricas (incluindo sMAPE), "
-    "mas não retorna a série prevista. Quando você estender `pipeline.py` para "
-    "expor as previsões, basta substituir este bloco."
-)
-
-# -----------------------------------------------------------------------------
-# Navegação
-# -----------------------------------------------------------------------------
-st.divider()
-go_mps = st.button(
-    "➡️ Usar esta previsão e ir para configuração dos Inputs do MPS",
-    type="primary",
-)
-if go_mps:
+if run:
     try:
-        st.switch_page("pages/05_Inputs_MPS.py")
-    except Exception:
-        st.info("Previsão salva! Abra **Inputs do MPS** pelo menu lateral.")
+        df_in = _make_df_input_from_hist(_hist)
+        with st.spinner("Executando o pipeline…"):
+            resultados = run_with_progress(df_in)
+
+        # Exibe resumo e campeão (inclui sMAPE)
+        champ = resultados.attrs.get("champion", {})
+        with results_area:
+            st.success("✅ Experimentos concluídos!")
+            if champ:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Modelo campeão", str(champ.get("model", "—")))
+                c2.metric("sMAPE (%)", f"{float(champ.get('sMAPE', float('nan'))):.2f}")
+                c3.metric("MAE", f"{float(champ.get('MAE', float('nan'))):.2f}")
+                c4.metric("RMSE", f"{float(champ.get('RMSE', float('nan'))):.2f}")
+                st.caption(f"Pré-processamento: **{champ.get('preprocess','-')}**  |  "
+                           f"Params: {champ.get('preprocess_params','-')}  |  "
+                           f"Hiperparâmetros: {champ.get('model_params','-')}")
+
+            with st.expander("Ver tabela completa de experimentos"):
+                st.dataframe(resultados, use_container_width=True, height=420)
+
+            st.info("Por ora mantemos a tabela de previsão **em branco durante a execução**. "
+                    "Se quiser, posso plugar a geração da série prevista do campeão em seguida.")
+
+        # Atualiza estado mínimo (somente horizonte definido; não salvamos forecast_df aqui)
+        st.session_state["forecast_h"] = int(horizon)
+        st.session_state["forecast_committed"] = False
+
+    except Exception as e:
+        st.error(f"Ocorreu um erro durante a execução: {e}")
