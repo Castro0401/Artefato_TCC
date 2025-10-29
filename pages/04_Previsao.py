@@ -6,8 +6,24 @@ import pandas as pd
 import streamlit as st
 
 # ===== core pipeline completo =====
-# ajuste o import conforme seu projeto: core/pipeline.py
-import PipelineCompletoV5.py as pipe
+# --- habilita import de pacotes na raiz do projeto (irmãos de /pages) ---
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]   # raiz do projeto (um nível acima de /pages)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# tente importar o pipeline exatamente pelo nome do arquivo
+try:
+    from core.PipelineCompletoV5 import run_full_pipeline as run_pipeline
+except ModuleNotFoundError as e:
+    import streamlit as st
+    missing = ROOT / "core" / "PipelineCompletoV5.py"
+    st.error("Não encontrei `core/PipelineCompletoV5.py` para importar.")
+    st.code(f"ROOT: {ROOT}\nExiste? {missing.exists()}\nsys.path[0]: {sys.path[0]}\nErro: {e}")
+    st.stop()
+
 
 st.title("🔮 Passo 2 — Previsão de Demanda")
 
