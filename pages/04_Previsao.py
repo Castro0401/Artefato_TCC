@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-# ===== core pipeline =====
+# ===== core pipeline completo =====
 # ajuste o import conforme seu projeto: core/pipeline.py
-import core.pipeline as pipe
+import PipelineCompletoV5.py as pipe
 
 st.title("🔮 Passo 2 — Previsão de Demanda")
 
