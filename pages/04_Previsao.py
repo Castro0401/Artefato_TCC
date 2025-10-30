@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 """
-04_Previsao.py — Previsão com:
-- menu lateral (horizonte 6/8/12 + modo rápido = grade reduzida)
+04_Previsao.py — Página de previsão com:
 - snapshot/restauração das grades (evita “grudar” modo rápido)
-- LSTM desativado explicitamente (compatível com seu pipeline)
-- Prophet desativado se o pipeline expuser flags comuns (opcional/seguro)
-- barra de progresso (lendo logs “progresso A/B”; suporte a progress_cb)
-- título com nome do modelo campeão
-- gráfico Real + Previsão
+- LSTM/Prophet desativados (para equivaler ao terminal)
+- barra de progresso incluindo bootstrap
+- console de logs ao vivo (exibe mensagens do pipeline)
+- modelo campeão + métricas + gráfico Real + Previsão
 """
 
-import sys, re, inspect, copy
+import sys, re, inspect, copy, contextlib, io, traceback
 from pathlib import Path
-import traceback
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -48,11 +45,11 @@ if not isinstance(_ts, pd.DataFrame) or not {"ds", "y"}.issubset(_ts.columns):
     st.error("Formato inesperado: esperado DataFrame com colunas ['ds','y'].")
     st.stop()
 
-# Converter rótulos "Mon/YY" -> Timestamp MS e formar série mensal contínua
-_PT_MON2NUM = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
+_PT_MON2NUM = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,
+               "Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
+
 def _label_to_month_start(v) -> pd.Timestamp:
-    if isinstance(v, pd.Timestamp):
-        return v
+    if isinstance(v, pd.Timestamp): return v
     s = str(v)
     try:
         if "/" in s:
@@ -73,7 +70,7 @@ s_monthly = (
 )
 
 # =============================
-# Snapshot dos grids originais (para restaurar depois)
+# Snapshot das grades originais
 # =============================
 _ORIG = {}
 def _snap_if_exists(name: str):
@@ -116,16 +113,13 @@ SEASONAL_PERIOD = 12
 DO_ORIGINAL = True
 DO_LOG = True
 
-# Desligar LSTM/Deep sempre (para espelhar o terminal, se lá não tem Keras)
+# Desliga LSTM/Deep e Prophet
 if hasattr(pipe, "KERAS_AVAILABLE"):
     pipe.KERAS_AVAILABLE = False
-
-# Desligar Prophet se o pipeline expuser alguma flag comum (seguro: ignora se não existir)
 for flag in ("ENABLE_PROPHET", "USE_PROPHET", "HAS_PROPHET", "FBPROPHET_ENABLED", "ENABLE_FBPROPHET"):
     if hasattr(pipe, flag):
         setattr(pipe, flag, False)
 
-# Aplicar/Restaurar grids conforme modo rápido
 if FAST_MODE:
     apply_fast_grids(pipe)
     DO_BOOTSTRAP = True
@@ -141,47 +135,72 @@ BOOTSTRAP_BLOCK = 24
 # Mostrar configuração efetiva
 # =============================
 def _total_steps(mod) -> int:
-    tot = 0
-    if hasattr(mod, "CROSTON_ALPHAS"): tot += len(mod.CROSTON_ALPHAS)
-    if hasattr(mod, "SBA_ALPHAS"):     tot += len(mod.SBA_ALPHAS)
+    base = 0
+    if hasattr(mod, "CROSTON_ALPHAS"): base += len(mod.CROSTON_ALPHAS)
+    if hasattr(mod, "SBA_ALPHAS"):     base += len(mod.SBA_ALPHAS)
     if hasattr(mod, "TSB_ALPHA_GRID") and hasattr(mod, "TSB_BETA_GRID"):
-        tot += len(mod.TSB_ALPHA_GRID) * len(mod.TSB_BETA_GRID)
+        base += len(mod.TSB_ALPHA_GRID) * len(mod.TSB_BETA_GRID)
     if (hasattr(mod, "RF_LAGS_GRID") and hasattr(mod, "RF_N_ESTIMATORS_GRID")
         and hasattr(mod, "RF_MAX_DEPTH_GRID")):
-        tot += len(mod.RF_LAGS_GRID) * len(mod.RF_N_ESTIMATORS_GRID) * len(mod.RF_MAX_DEPTH_GRID)
+        base += len(mod.RF_LAGS_GRID) * len(mod.RF_N_ESTIMATORS_GRID) * len(mod.RF_MAX_DEPTH_GRID)
     if hasattr(mod, "SARIMA_GRID"):
         g = mod.SARIMA_GRID
-        tot += len(g["p"]) * len(g["d"]) * len(g["q"]) * len(g["P"]) * len(g["D"]) * len(g["Q"])
-    return tot
+        base += len(g["p"]) * len(g["d"]) * len(g["q"]) * len(g["P"]) * len(g["D"]) * len(g["Q"])
+    total = base * (N_BOOTSTRAP + 1)
+    return max(1, total)
 
 TOTAL = _total_steps(pipe)
-st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações={TOTAL} | bootstrap={N_BOOTSTRAP}")
+st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações≈{TOTAL // (N_BOOTSTRAP+1)} | bootstrap={N_BOOTSTRAP} | total_passos≈{TOTAL}")
 
 # =============================
-# Botão + barra de progresso
+# Botão + barra + console de logs
 # =============================
 run = st.button("▶️ Rodar previsão", type="primary")
 prog = st.progress(0)
 prog_text = st.empty()
 
-# Pegar progresso de logs (“... progresso A/B”) + suporte a progress_cb
+log_box = st.expander("📜 Console de logs (ao vivo)", expanded=True)
+log_area = log_box.empty()
+_log_lines = []
+
+def _push_log(line: str):
+    _log_lines.append(str(line))
+    if len(_log_lines) > 400:
+        del _log_lines[:len(_log_lines) - 400]
+    log_area.text("\n".join(_log_lines))
+
 _original_log = getattr(pipe, "log", print)
 _step = {"done": 0}
 
+_bootstrap_pat = re.compile(r"bootstrap\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+_generic_pat   = re.compile(r"progresso\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+
 def _progress_from_msg(msg: str):
-    m = re.search(r"progresso\s+(\d+)\s*/\s*(\d+)", str(msg))
+    s = str(msg)
+    m = _bootstrap_pat.search(s)
     if m:
         cur, tot = int(m.group(1)), int(m.group(2))
-        inc = max(0, cur - _step.get("__last_block_cur", 0))
-        _step["done"] = min(TOTAL, _step["done"] + inc)
-        _step["__last_block_cur"] = cur
+        base = max(1, TOTAL // (N_BOOTSTRAP + 1))
+        target = min(TOTAL, base * (1 + cur))
+        if target > _step["done"]:
+            _step["done"] = target
+        return
+    m2 = _generic_pat.search(s)
+    if m2:
+        cur, tot = int(m2.group(1)), int(m2.group(2))
+        base = max(1, TOTAL // (N_BOOTSTRAP + 1))
+        target = min(TOTAL, int(round(base * cur / max(1, tot))))
+        if target > _step["done"]:
+            _step["done"] = target
 
 def _patched_log(msg: str):
+    s = str(msg)
     try:
-        _progress_from_msg(str(msg))
-        pct = 0 if TOTAL == 0 else min(100, int(round(_step["done"] * 100 / TOTAL)))
-        prog.progress(pct)
-        prog_text.write(f"{pct}% — {msg}" if pct < 100 else "100% — concluído")
+        _push_log(s)
+        _progress_from_msg(s)
+        pct = int(round(_step["done"] * 100 / TOTAL))
+        prog.progress(min(100, max(0, pct)))
+        prog_text.write(f"{pct}% — {s}" if pct < 100 else "100% — concluído")
     except Exception:
         pass
     _original_log(msg)
@@ -211,21 +230,24 @@ if run:
     try:
         wired, extra = _wire_progress()
         with st.spinner("Executando pipeline…"):
-            resultados = pipe.run_full_pipeline(
-                data_input=s_monthly,
-                sheet_name=None, date_col=None, value_col=None,
-                horizon=HORIZON, seasonal_period=SEASONAL_PERIOD,
-                do_original=DO_ORIGINAL, do_log=DO_LOG, do_bootstrap=DO_BOOTSTRAP,
-                n_bootstrap=N_BOOTSTRAP, bootstrap_block=BOOTSTRAP_BLOCK,
-                save_dir=None,
-                **extra
-            )
+            _stdout = io.StringIO()
+            _stderr = io.StringIO()
+            with contextlib.redirect_stdout(_stdout), contextlib.redirect_stderr(_stderr):
+                resultados = pipe.run_full_pipeline(
+                    data_input=s_monthly,
+                    sheet_name=None, date_col=None, value_col=None,
+                    horizon=HORIZON, seasonal_period=SEASONAL_PERIOD,
+                    do_original=DO_ORIGINAL, do_log=DO_LOG, do_bootstrap=True,
+                    n_bootstrap=N_BOOTSTRAP, bootstrap_block=24,
+                    save_dir=None,
+                    **extra
+                )
+            if _stdout.getvalue(): _push_log(_stdout.getvalue())
+            if _stderr.getvalue(): _push_log(_stderr.getvalue())
+
         prog.progress(100)
         prog_text.write("100% — concluído")
 
-        # =============================
-        # Modelo campeão e métricas
-        # =============================
         champ = resultados.attrs.get("champion", {})
         modelo_nome = champ.get("model", "Desconhecido")
         titulo_modelo = f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if FAST_MODE else "")
@@ -254,17 +276,13 @@ if run:
         # Gráfico Real + Previsão
         # =============================
         forecast = None
-        for key in ("forecast", "forecast_df", "yhat", "pred", "prediction"):
+        for key in ("forecast","forecast_df","yhat","pred","prediction"):
             if key in resultados.attrs:
                 forecast = resultados.attrs[key]
                 break
 
-        if isinstance(forecast, pd.DataFrame) and {"ds", "yhat"}.issubset(forecast.columns):
-            f_idx = (
-                pd.to_datetime(forecast["ds"])
-                if not isinstance(forecast.index, pd.DatetimeIndex)
-                else forecast.index
-            )
+        if isinstance(forecast, pd.DataFrame) and {"ds","yhat"}.issubset(forecast.columns):
+            f_idx = pd.to_datetime(forecast["ds"])
             forecast_s = pd.Series(forecast["yhat"].astype(float).to_numpy(), index=f_idx)
         elif isinstance(forecast, pd.Series):
             forecast_s = forecast.astype(float)
@@ -272,11 +290,7 @@ if run:
             last = s_monthly[-SEASONAL_PERIOD:]
             reps = int((HORIZON + SEASONAL_PERIOD - 1) // SEASONAL_PERIOD)
             vals = np.tile(last.to_numpy(), reps)[:HORIZON]
-            f_idx = pd.date_range(
-                s_monthly.index[-1] + pd.offsets.MonthBegin(1),
-                periods=HORIZON,
-                freq="MS",
-            )
+            f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=HORIZON, freq="MS")
             forecast_s = pd.Series(vals, index=f_idx)
 
         plot_df = pd.DataFrame({"Real": s_monthly, "Previsão": forecast_s})
@@ -291,6 +305,5 @@ if run:
         st.error("Falha ao executar a previsão. Veja o traceback abaixo:")
         st.code("\n".join(traceback.format_exc().splitlines()), language="text")
     finally:
-        # restaurar logger original (boa prática)
         if hasattr(pipe, "log"):
             pipe.log = _original_log
