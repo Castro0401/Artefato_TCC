@@ -1,95 +1,107 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-
 """
-04_Previsao.py — versão simples e acoplada ao fluxo
-- Usa a série enviada/validada em pages/01_Upload.py via st.session_state
-- Converte para série mensal contínua (freq='MS') com interpolação linear
-- Chama pipe.run_full_pipeline passando uma *Series* para replicar o comportamento do terminal
+04_Previsao.py — versão final minimalista
+Objetivo: reproduzir exatamente os resultados do core/pipeline.py a partir dos
+dados validados no 01_Upload.py, com 1 clique e sem preocupações de UX.
+
+Requisitos do estado (preenchidos no 01_Upload.py):
+- st.session_state["ts_df_norm"]: DataFrame com colunas ["ds", "y"],
+  onde "ds" pode estar no formato de rótulo "Mon/YY" (ex.: "Set/25").
+- st.session_state["product_name"] (opcional) e st.session_state["upload_ok"] (bool).
+
+Estrutura esperada do projeto:
+artefato_tcc/
+  Menu.py
+  core/
+    pipeline.py
+    __init__.py           # (recomendado; pode ser vazio)
+  pages/
+    01_Upload.py
+    04_Previsao.py
 """
 
-import traceback
-from datetime import datetime
+import sys
 from pathlib import Path
-
+import traceback
 import pandas as pd
 import streamlit as st
 
-# === localizar o pipeline.py no diretório raiz do app ===
-import sys
-from pathlib import Path
-ROOT = Path(__file__).resolve().parent.parent  # .../artefato_tcc
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-# também adiciona core/ ao sys.path
+# =============================
+# Inserir caminhos para importar core/pipeline
+# =============================
+ROOT = Path(__file__).resolve().parent.parent      # .../artefato_tcc
 CORE = ROOT / "core"
-if str(CORE) not in sys.path:
-    sys.path.insert(0, str(CORE))
+for p in (ROOT, CORE):
+    sp = str(p)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
 
-# Agora a importação funciona se pipeline.py estiver em artefato_tcc/pipeline.py
-# Import do pipeline dentro da pasta core/
 try:
     from core import pipeline as pipe
 except ModuleNotFoundError:
-    import pipeline as pipe
+    import pipeline as pipe  # fallback
 
 st.set_page_config(page_title="Previsão", page_icon="🔮", layout="wide")
-st.title("🔮 Passo 2: Previsão (1 clique)")
+st.title("🔮 Passo 2 — Previsão (1 clique)")
 
-# === helpers ===
+# =============================
+# Recupera a série do Upload
+# =============================
+if not st.session_state.get("upload_ok"):
+    st.error("Nenhuma série encontrada. Volte ao Passo 1 (Upload) para carregar os dados.")
+    st.stop()
+
+_ts = st.session_state.get("ts_df_norm")
+if not isinstance(_ts, pd.DataFrame) or not {"ds", "y"}.issubset(_ts.columns):
+    st.error("Formato inesperado da série: esperado DataFrame com colunas ['ds','y'].")
+    st.stop()
+
+product_name = st.session_state.get("product_name", "Produto")
+st.caption(f"Série atual: **{product_name}**")
+st.dataframe(_ts.head(12), use_container_width=True)
+
+# =============================
+# Converte rótulos para datas (primeiro dia do mês) e cria Series mensal contínua
+# =============================
 _PT_MON2NUM = {
     "Jan": 1, "Fev": 2, "Mar": 3, "Abr": 4, "Mai": 5, "Jun": 6,
     "Jul": 7, "Ago": 8, "Set": 9, "Out": 10, "Nov": 11, "Dez": 12,
 }
 
-def _restore_month_start_from_label(label: str) -> pd.Timestamp:
-    """Converte rótulos do tipo "Set/25" para Timestamp YYYY-MM-01.
-    Regra do ano: 20 + YY (ex.: 25 -> 2025). Ajuste aqui se tiver sérios < 2000.
-    """
+def _label_to_month_start(val) -> pd.Timestamp:
+    # Se já vier datetime, só converte
+    if isinstance(val, (pd.Timestamp,)):
+        return pd.to_datetime(val)
+    s = str(val)
     try:
-        mon_pt, yy = label.split("/")
-        y = 2000 + int(yy)  # heurística: anos 2000+
-        m = _PT_MON2NUM[mon_pt]
-        return pd.Timestamp(year=y, month=m, day=1)
+        if "/" in s:
+            mon, yy = s.split("/")
+            y = 2000 + int(yy)  # regra simples; ajuste se necessário
+            m = _PT_MON2NUM.get(mon)
+            if m is None:
+                return pd.to_datetime(s, errors="coerce")
+            return pd.Timestamp(year=y, month=m, day=1)
+        return pd.to_datetime(s, errors="coerce")
     except Exception:
-        # Tenta parsear diretamente (caso já venha em outro formato)
-        return pd.to_datetime(label, errors="coerce")
+        return pd.NaT
 
-# === checagens de sessão ===
-if not st.session_state.get("upload_ok"):
-    st.error("Nenhuma série carregada ainda. Volte ao Passo 1 para fazer o upload.")
-    st.page_link("pages/01_Upload.py", label="⬅️ Ir para Upload")
-    st.stop()
-
-# Série mensal normalizada que vem do 01_Upload.py
-# Esperado: DataFrame com colunas ["ds", "y"], onde "ds" está no formato "Set/25"
-ts_df_norm = st.session_state.get("ts_df_norm")
-product_name = st.session_state.get("product_name", "Produto")
-
-if ts_df_norm is None or not isinstance(ts_df_norm, pd.DataFrame) or set(ts_df_norm.columns) != {"ds","y"}:
-    st.error("Formato inesperado da série em memória. Refaça o upload no Passo 1.")
-    st.stop()
-
-st.write(f"Item atual: **{product_name}**")
-st.dataframe(ts_df_norm.head(15), use_container_width=True)
-
-# === converte rótulos para datas (MonthStart) e prepara Series mensal contínua ===
-# Tenta restaurar timestamps a partir de rótulos "Mon/YY".
-if pd.api.types.is_datetime64_any_dtype(ts_df_norm["ds"]):
-    idx = pd.to_datetime(ts_df_norm["ds"])  # já são datas
-else:
-    idx = ts_df_norm["ds"].apply(_restore_month_start_from_label)
+_idx = _ts["ds"].map(_label_to_month_start)
+if _idx.isna().any():
+    st.warning("Alguns rótulos de data não foram convertidos e serão descartados.")
 
 s_monthly = (
-    pd.Series(ts_df_norm["y"].astype(float).to_numpy(), index=idx)
+    pd.Series(_ts.loc[_idx.notna(), "y"].astype(float).to_numpy(), index=_idx[_idx.notna()])
       .sort_index()
-      .asfreq("MS")           # garante grade mensal contínua
-      .interpolate("linear")  # igual ao terminal
+      .asfreq("MS")           # grade mensal contínua
+      .interpolate("linear")  # igual ao preparo usado ao ler Excel no terminal
       .bfill()
       .ffill()
 )
 
-# Parâmetros fixos para igualar ao terminal (ajuste se necessário)
+# =============================
+# Parâmetros (fixos para bater com o terminal agora)
+# =============================
 HORIZON = 6
 SEASONAL_PERIOD = 12
 DO_ORIGINAL = True
@@ -98,47 +110,47 @@ DO_BOOTSTRAP = True
 N_BOOTSTRAP = 20
 BOOTSTRAP_BLOCK = 24
 
-st.divider()
+run = st.button("▶️ Rodar previsão", type="primary")
 
-if st.button("▶️ Rodar previsão", type="primary"):
+if run:
     try:
-        with st.status("Executando pipeline…", expanded=True) as status:
-            st.write("Preparando série mensal contínua e chamando `run_full_pipeline`…")
+        with st.spinner("Executando pipeline… isso pode levar alguns minutos…"):
             resultados = pipe.run_full_pipeline(
-                data_input=s_monthly,          # passa Series para replicar caminho do terminal
+                data_input=s_monthly,
                 sheet_name=None, date_col=None, value_col=None,
                 horizon=HORIZON, seasonal_period=SEASONAL_PERIOD,
                 do_original=DO_ORIGINAL, do_log=DO_LOG, do_bootstrap=DO_BOOTSTRAP,
                 n_bootstrap=N_BOOTSTRAP, bootstrap_block=BOOTSTRAP_BLOCK,
                 save_dir=None,
             )
-            status.update(label="Pipeline finalizado.", state="complete")
 
         champ = resultados.attrs.get("champion", {})
 
-        st.subheader("🏆 Modelo Campeão")
-        if champ:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("MAE", f"{champ.get('MAE', float('nan')):.4g}")
-            c2.metric("sMAPE (%)", f"{champ.get('sMAPE', float('nan')):.4g}")
-            c3.metric("RMSE", f"{champ.get('RMSE', float('nan')):.4g}")
-            c4.metric("MAPE (%)", f"{champ.get('MAPE', float('nan')):.4g}")
+        st.subheader("🏆 Modelo Campeão (métricas)")
+        def _fmt(x):
+            try:
+                return f"{float(x):.4g}"
+            except Exception:
+                return str(x)
 
-            st.write({
-                "preprocess": champ.get("preprocess"),
-                "preprocess_params": champ.get("preprocess_params"),
-                "model": champ.get("model"),
-                "model_params": champ.get("model_params"),
-            })
-        else:
-            st.warning("Campeão não encontrado nos atributos. Verifique logs do pipeline.")
+        cols = st.columns(4)
+        cols[0].metric("MAE", _fmt(champ.get("MAE")))
+        cols[1].metric("sMAPE (%)", _fmt(champ.get("sMAPE")))
+        cols[2].metric("RMSE", _fmt(champ.get("RMSE")))
+        cols[3].metric("MAPE (%)", _fmt(champ.get("MAPE")))
 
-        st.subheader("📋 Experimentos")
+        st.write("Parâmetros do campeão:")
+        st.json({
+            "preprocess": champ.get("preprocess"),
+            "preprocess_params": champ.get("preprocess_params"),
+            "model": champ.get("model"),
+            "model_params": champ.get("model_params"),
+        })
+
+        st.subheader("📋 Experimentos (resumo)")
         st.dataframe(resultados.reset_index(drop=True), use_container_width=True)
 
-    except Exception as e:
-        st.error("Falha ao executar a previsão. Detalhes abaixo:")
-        st.exception(e)
-        import traceback as _tb
+    except Exception:
+        st.error("Falha ao executar a previsão. Veja o traceback abaixo:")
         st.code("
-".join(_tb.format_exc().splitlines()[-40:]), language="text")
+".join(traceback.format_exc().splitlines()), language="text")
