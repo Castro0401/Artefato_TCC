@@ -15,7 +15,23 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-import pipeline as pipe  # precisa estar acessível no PYTHONPATH/pasta do app
+# === localizar o pipeline.py no diretório raiz do app ===
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent  # .../artefato_tcc
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+# também adiciona core/ ao sys.path
+CORE = ROOT / "core"
+if str(CORE) not in sys.path:
+    sys.path.insert(0, str(CORE))
+
+# Agora a importação funciona se pipeline.py estiver em artefato_tcc/pipeline.py
+# Import do pipeline dentro da pasta core/
+try:
+    from core import pipeline as pipe
+except ModuleNotFoundError:
+    import pipeline as pipe
 
 st.set_page_config(page_title="Previsão", page_icon="🔮", layout="wide")
 st.title("🔮 Passo 2: Previsão (1 clique)")
@@ -124,4 +140,5 @@ if st.button("▶️ Rodar previsão", type="primary"):
         st.error("Falha ao executar a previsão. Detalhes abaixo:")
         st.exception(e)
         import traceback as _tb
-        st.code("\n".join(_tb.format_exc().splitlines()[-40:]), language="text")
+        st.code("
+".join(_tb.format_exc().splitlines()[-40:]), language="text")
