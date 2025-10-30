@@ -6,10 +6,11 @@ from __future__ import annotations
 - LSTM/Prophet desativados (para equivaler ao terminal)
 - barra de progresso incluindo bootstrap
 - console de logs ao vivo (exibe mensagens do pipeline)
+- guard de execução (evita reexecutar após concluir)
 - modelo campeão + métricas + gráfico Real + Previsão
 """
 
-import sys, re, inspect, copy, contextlib, io, traceback
+import sys, re, inspect, copy, contextlib, io, traceback, time
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -32,6 +33,12 @@ except ModuleNotFoundError:
 
 st.set_page_config(page_title="Previsão", page_icon="🔮", layout="wide")
 st.title("🔮 Passo 2 — Previsão")
+
+# ---- guards para não reexecutar sem clique novo
+if "is_running" not in st.session_state:
+    st.session_state.is_running = False
+if "run_id" not in st.session_state:
+    st.session_state.run_id = None
 
 # =============================
 # Recuperar série do Upload
@@ -155,13 +162,17 @@ st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinaç�
 # =============================
 # Botão + barra + console de logs
 # =============================
-run = st.button("▶️ Rodar previsão", type="primary")
+clicked = st.button("▶️ Rodar previsão", type="primary", disabled=st.session_state.is_running)
+if clicked and not st.session_state.is_running:
+    st.session_state.is_running = True
+    st.session_state.run_id = time.time()
+
 prog = st.progress(0)
 prog_text = st.empty()
 
 log_box = st.expander("📜 Console de logs (ao vivo)", expanded=True)
 log_area = log_box.empty()
-_log_lines = []
+_log_lines: list[str] = []
 
 def _push_log(line: str):
     _log_lines.append(str(line))
@@ -224,9 +235,9 @@ def _wire_progress():
     return wired, extra
 
 # =============================
-# Execução
+# Execução (guard)
 # =============================
-if run:
+if st.session_state.is_running:
     try:
         wired, extra = _wire_progress()
         with st.spinner("Executando pipeline…"):
@@ -238,68 +249,18 @@ if run:
                     sheet_name=None, date_col=None, value_col=None,
                     horizon=HORIZON, seasonal_period=SEASONAL_PERIOD,
                     do_original=DO_ORIGINAL, do_log=DO_LOG, do_bootstrap=True,
-                    n_bootstrap=N_BOOTSTRAP, bootstrap_block=24,
+                    n_bootstrap=N_BOOTSTRAP, bootstrap_block=BOOTSTRAP_BLOCK,
                     save_dir=None,
                     **extra
                 )
             if _stdout.getvalue(): _push_log(_stdout.getvalue())
             if _stderr.getvalue(): _push_log(_stderr.getvalue())
 
+        # guarda o resultado para reexibir sem reprocessar
+        st.session_state["last_result"] = resultados
+
         prog.progress(100)
         prog_text.write("100% — concluído")
-
-        champ = resultados.attrs.get("champion", {})
-        modelo_nome = champ.get("model", "Desconhecido")
-        titulo_modelo = f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if FAST_MODE else "")
-        st.subheader(titulo_modelo)
-
-        def _fmt(x):
-            try:
-                return f"{float(x):.4g}"
-            except Exception:
-                return str(x)
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("MAE", _fmt(champ.get("MAE")))
-        c2.metric("sMAPE (%)", _fmt(champ.get("sMAPE")))
-        c3.metric("RMSE", _fmt(champ.get("RMSE")))
-        c4.metric("MAPE (%)", _fmt(champ.get("MAPE")))
-
-        st.caption("Parâmetros do modelo campeão:")
-        st.json({
-            "preprocess": champ.get("preprocess"),
-            "preprocess_params": champ.get("preprocess_params"),
-            "model_params": champ.get("model_params"),
-        })
-
-        # =============================
-        # Gráfico Real + Previsão
-        # =============================
-        forecast = None
-        for key in ("forecast","forecast_df","yhat","pred","prediction"):
-            if key in resultados.attrs:
-                forecast = resultados.attrs[key]
-                break
-
-        if isinstance(forecast, pd.DataFrame) and {"ds","yhat"}.issubset(forecast.columns):
-            f_idx = pd.to_datetime(forecast["ds"])
-            forecast_s = pd.Series(forecast["yhat"].astype(float).to_numpy(), index=f_idx)
-        elif isinstance(forecast, pd.Series):
-            forecast_s = forecast.astype(float)
-        else:
-            last = s_monthly[-SEASONAL_PERIOD:]
-            reps = int((HORIZON + SEASONAL_PERIOD - 1) // SEASONAL_PERIOD)
-            vals = np.tile(last.to_numpy(), reps)[:HORIZON]
-            f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=HORIZON, freq="MS")
-            forecast_s = pd.Series(vals, index=f_idx)
-
-        plot_df = pd.DataFrame({"Real": s_monthly, "Previsão": forecast_s})
-        cut = max(36, HORIZON + 6)
-        st.subheader("📈 Histórico + Previsão")
-        st.line_chart(plot_df.iloc[-cut:], height=280)
-
-        st.subheader("📋 Experimentos (resumo)")
-        st.dataframe(resultados.reset_index(drop=True), use_container_width=True)
 
     except Exception:
         st.error("Falha ao executar a previsão. Veja o traceback abaixo:")
@@ -307,3 +268,57 @@ if run:
     finally:
         if hasattr(pipe, "log"):
             pipe.log = _original_log
+        st.session_state.is_running = False
+
+# =============================
+# Render da saída se já houver resultado salvo
+# =============================
+resultados = st.session_state.get("last_result")
+if resultados is not None:
+    champ = resultados.attrs.get("champion", {})
+    modelo_nome = champ.get("model", "Desconhecido")
+    titulo_modelo = f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if FAST_MODE else "")
+    st.subheader(titulo_modelo)
+
+    def _fmt(x):
+        try: return f"{float(x):.4g}"
+        except Exception: return str(x)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("MAE", _fmt(champ.get("MAE")))
+    c2.metric("sMAPE (%)", _fmt(champ.get("sMAPE")))
+    c3.metric("RMSE", _fmt(champ.get("RMSE")))
+    c4.metric("MAPE (%)", _fmt(champ.get("MAPE")))
+
+    st.caption("Parâmetros do modelo campeão:")
+    st.json({
+        "preprocess": champ.get("preprocess"),
+        "preprocess_params": champ.get("preprocess_params"),
+        "model_params": champ.get("model_params"),
+    })
+
+    # Gráfico Real + Previsão
+    forecast = None
+    for key in ("forecast","forecast_df","yhat","pred","prediction"):
+        if key in resultados.attrs:
+            forecast = resultados.attrs[key]; break
+
+    if isinstance(forecast, pd.DataFrame) and {"ds","yhat"}.issubset(forecast.columns):
+        f_idx = pd.to_datetime(forecast["ds"])
+        forecast_s = pd.Series(forecast["yhat"].astype(float).to_numpy(), index=f_idx)
+    elif isinstance(forecast, pd.Series):
+        forecast_s = forecast.astype(float)
+    else:
+        last = s_monthly[-SEASONAL_PERIOD:]
+        reps = int((HORIZON + SEASONAL_PERIOD - 1) // SEASONAL_PERIOD)
+        vals = np.tile(last.to_numpy(), reps)[:HORIZON]
+        f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=HORIZON, freq="MS")
+        forecast_s = pd.Series(vals, index=f_idx)
+
+    plot_df = pd.DataFrame({"Real": s_monthly, "Previsão": forecast_s})
+    cut = max(36, HORIZON + 6)
+    st.subheader("📈 Histórico + Previsão")
+    st.line_chart(plot_df.iloc[-cut:], height=280)
+
+    st.subheader("📋 Experimentos (resumo)")
+    st.dataframe(resultados.reset_index(drop=True), use_container_width=True)
