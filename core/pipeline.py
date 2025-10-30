@@ -767,37 +767,18 @@ def run_full_pipeline(
     # Ordenação leve para visualização (não afeta o campeão já escolhido)
     df_out = df_out.sort_values(by=["preprocess","model","MAE","RMSE"]).reset_index(drop=True)
 
-    # === (NOVO) Forecast real do campeão (refit na série completa) ===
-    try:
-        forecast_df = _refit_and_forecast_champion(
-            base_series=base_series,
-            champion_row=champion,
-            horizon=horizon,
-            seasonal_period=seasonal_period
-        )
-        log(f"[OK] Previsão futura gerada com o campeão: {len(forecast_df)} meses")
-    except Exception as e:
-        log(f"[WARN] Falha ao gerar previsão futura do campeão: {e}")
-        # fallback vazio — a página decidirá o que fazer
-        forecast_df = pd.DataFrame({"ds": [], "y": []})
-
     # Persistência dos resultados
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         xlsx_path = os.path.join(save_dir, "experimentos_unificado.xlsx")
         csv_path  = os.path.join(save_dir, "experimentos_unificado.csv")
         champion_path = os.path.join(save_dir, "champion.csv")
-        forecast_path = os.path.join(save_dir, "forecast_campeao.csv")
         with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
             df_out.to_excel(writer, sheet_name="experiments", index=False)
             pd.DataFrame([champion]).to_excel(writer, sheet_name="champion", index=False)
-            if len(forecast_df):
-                forecast_df.to_excel(writer, sheet_name="forecast", index=False)
         df_out.to_csv(csv_path, index=False)
         pd.DataFrame([champion]).to_csv(champion_path, index=False)
-        if len(forecast_df):
-            forecast_df.to_csv(forecast_path, index=False)
-        log(f"[OK] Resultados salvos em:\n - {xlsx_path}\n - {csv_path}\n - {champion_path}\n - {forecast_path if len(forecast_df) else '(sem forecast)'}")
+        log(f"[OK] Resultados salvos em:\n - {xlsx_path}\n - {csv_path}\n - {champion_path}")
 
     log(f"==== PIPELINE FINALIZADO ====\nLinhas totais de experimentos: {len(df_out)}")
     log("Resumo rápido por preprocess:")
@@ -805,244 +786,9 @@ def run_full_pipeline(
     for k, v in resumo.items():
         log(f"  • {k}: {v} linhas")
 
-    # Guarda o campeão e a PREVISÃO como atributos do DataFrame para o app
+    # Guarda o campeão como atributo do DataFrame para acesso rápido no app
     df_out.attrs["champion"] = champion.to_dict()
-    df_out.attrs["forecast_df"] = forecast_df.copy()
     return df_out
-
-
-# === (ADICIONE) UTIL: rótulos futuros mensais =========================
-def _future_month_labels(last_ts: pd.Timestamp, h: int) -> list[str]:
-    _PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
-    fut_idx = pd.date_range(last_ts + pd.offsets.MonthBegin(1), periods=h, freq="MS")
-    return [f"{_PT[d.month]}/{str(d.year)[-2:]}" for d in fut_idx]
-
-# === (ADICIONE) UTIL: transformar conforme preprocess do campeão =======
-def _get_transforms_for_preprocess(preprocess_label: str, base_series: pd.Series):
-    """
-    Retorna (forward_transform, inverse_transform, params_txt) para o rótulo do campeão.
-    - 'original' -> (None, None, "-")
-    - 'log'      -> (fwd, inv, "epsilon=..., shift=..., score=...")
-    - 'bootstrap' -> por definição são séries sintéticas; para previsão final usamos a série original
-                     (isto é, tratamos como 'original' aqui).
-    """
-    if preprocess_label == "log":
-        fwd, inv, params_txt = make_log_transformers(base_series, window=6)
-        return fwd, inv, params_txt
-    # fallback: original
-    return None, None, "-"
-
-# === (ADICIONE) REFIT + FORECAST DO CAMPEÃO ============================
-def _parse_params(text: str) -> dict:
-    """
-    Extrai pares simples de 'chave=valor' de strings como:
-      - "alpha=0.2"
-      - "alpha=0.3, beta=0.5"
-      - "order=(1,1,1), seasonal=(0,1,1,12), AIC=123.45"
-      - "lags=1..12, n_estimators=200, max_depth=None"
-    Retorna dict com valores numéricos/tuplas quando possível.
-    """
-    out = {}
-    if not isinstance(text, str):
-        return out
-    try:
-        parts = [p.strip() for p in text.split(",")]
-        for p in parts:
-            if "=" not in p: 
-                continue
-            k, v = [x.strip() for x in p.split("=", 1)]
-            # tuplas
-            if v.startswith("(") and v.endswith(")"):
-                try:
-                    out[k] = eval(v)
-                    continue
-                except Exception:
-                    pass
-            # intervalos estilo "1..12"
-            if ".." in v:
-                a, b = v.split("..")
-                out[k] = (int(a), int(b))
-                continue
-            # None
-            if v.lower() == "none":
-                out[k] = None
-                continue
-            # numérico
-            try:
-                if "." in v or "e" in v.lower():
-                    out[k] = float(v)
-                else:
-                    out[k] = int(v)
-                continue
-            except Exception:
-                pass
-            out[k] = v
-    except Exception:
-        pass
-    return out
-
-def _refit_and_forecast_champion(base_series: pd.Series,
-                                 champion_row: pd.Series,
-                                 horizon: int,
-                                 seasonal_period: int) -> pd.DataFrame:
-    """
-    Reajusta o modelo campeão na SÉRIE COMPLETA (com a mesma transformação do preprocess)
-    e gera previsão h passos à frente em escala ORIGINAL.
-    Retorna DataFrame {"ds": labels_mês_pt, "y": valores >= 0}.
-    """
-    model = str(champion_row["model"])
-    params = str(champion_row["model_params"])
-    preprocess = str(champion_row["preprocess"])
-
-    # 1) transformação conforme preprocess campeão
-    fwd, inv, _ = _get_transforms_for_preprocess(preprocess, base_series)
-    s_fit = fwd(base_series) if fwd else base_series
-    s_fit = pd.Series(s_fit.values, index=base_series.index, dtype=float)
-    s_fit = s_fit.replace([np.inf, -np.inf], np.nan).interpolate("linear").bfill().ffill()
-
-    # 2) previsão por família
-    y_pred_model = None
-    P = _parse_params(params)
-
-    if model == "SARIMAX":
-        order = P.get("order", (0,1,1))
-        seasonal = P.get("seasonal", (0,1,1, seasonal_period))
-        res = SARIMAX(s_fit, order=tuple(order), seasonal_order=tuple(seasonal),
-                      enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
-        y_pred_model = res.get_forecast(steps=horizon).predicted_mean.values.astype(float)
-
-    elif model in ("Croston", "SBA", "TSB"):
-        hist = s_fit.values.astype(float)
-        if model == "Croston":
-            alpha = float(P.get("alpha", 0.1))
-            _, y_pred_model = croston_forecast(hist, alpha, horizon)
-        elif model == "SBA":
-            alpha = float(P.get("alpha", 0.1))
-            _, y_pred_model = sba_forecast(hist, alpha, horizon)
-        else:  # TSB
-            alpha = float(P.get("alpha", 0.3)); beta = float(P.get("beta", 0.3))
-            _, y_pred_model = tsb_forecast(hist, alpha, beta, horizon)
-
-    elif model == "RandomForest":
-        # Precisamos gerar features recursivamente para os próximos h passos
-        lpair = P.get("lags", P.get("lags=1..k", (1, 12)))
-        if isinstance(lpair, tuple):
-            max_lag = max(lpair)
-        else:
-            # se veio "lags=1..12" transformado em (1,12)
-            max_lag = int(lpair) if isinstance(lpair, (int, float)) else 12
-        n_est = int(P.get("n_estimators", 200))
-        max_depth = P.get("max_depth", None)
-
-        # Treina no passado
-        df_sup = make_supervised_from_series(s_fit, list(range(1, max_lag+1)))
-        y = df_sup["y"].values
-        X = df_sup.drop(columns=["y"]).values
-        rf = RandomForestRegressor(n_estimators=n_est, random_state=RANDOM_STATE, max_depth=max_depth)
-        rf.fit(X, y)
-
-        # Prevê recursivamente h meses
-        cur = s_fit.copy()
-        preds = []
-        last_ts = cur.index[-1]
-        for _ in range(horizon):
-            # monta features do próximo mês
-            tmp = pd.DataFrame({"y": cur.values}, index=cur.index)
-            for L in range(1, max_lag+1):
-                tmp[f"lag_{L}"] = tmp["y"].shift(L)
-            # linha "do próximo mês": use os últimos valores conhecidos
-            row = tmp.iloc[-1:].copy()
-            # como vamos prever t+1, nossos lags para t+1 são exatamente tmp.iloc[-1, lag_*]
-            feat = row.drop(columns=["y"]).values
-            # completa dummies de mês como em make_supervised_from_series
-            # (reconstroi rapidinho com o mesmo esquema)
-            next_month = (last_ts + pd.offsets.MonthBegin(1)).month
-            base_cols = [c for c in df_sup.drop(columns=["y"]).columns if not c.startswith("month_")]
-            month_cols = [c for c in df_sup.drop(columns=["y"]).columns if c.startswith("month_")]
-            x_vec = np.zeros((1, len(base_cols)+len(month_cols)), dtype=float)
-
-            # preencher lags (na mesma ordem de df_sup)
-            # reconstrói ordem exata:
-            X_cols = list(df_sup.drop(columns=["y"]).columns)
-            x_map = {}
-            for i, c in enumerate(base_cols):
-                # localiza valor do feat conforme coluna
-                try:
-                    idx = list(row.drop(columns=["y"]).columns).index(c)
-                    x_map[c] = float(feat[0, idx])
-                except Exception:
-                    x_map[c] = np.nan
-            for mc in month_cols:
-                # month_2..month_12 (drop_first=True no treinamento)
-                want = int(mc.split("_")[1])
-                x_map[mc] = 1.0 if want == next_month else 0.0
-
-            # reordena conforme X_cols
-            X_next = np.array([[x_map.get(c, 0.0) for c in X_cols]], dtype=float)
-            y_next = float(rf.predict(X_next)[0])
-            preds.append(y_next)
-            # anexa no fim e anda o tempo
-            last_ts = last_ts + pd.offsets.MonthBegin(1)
-            cur = pd.concat([cur, pd.Series([y_next], index=[last_ts])])
-
-        y_pred_model = np.array(preds, dtype=float)
-
-    elif model == "LSTM":
-        # Para manter simples, refaz o treinamento e previsão como no holdout,
-        # porém expandindo para 'h' passos. Se TensorFlow não estiver disponível,
-        # protegemos com mensagem clara (mas no seu pipeline já tratamos KERAS_AVAILABLE).
-        if not KERAS_AVAILABLE:
-            raise RuntimeError("TensorFlow/Keras indisponível para refit do LSTM.")
-        # Reaproveita a função já existente:
-        # Estratégia: usamos janela 'window' padrão = 12 (ou o que você preferir).
-        window, epochs, batch = 12, 30, 16
-        # Treinamos sobre toda a série e usamos abordagem recursiva semelhante ao RF,
-        # mas mantendo a normalização; para brevidade, chamamos a função de treino
-        # e depois iteramos h vezes com a janela mais recente.
-        # (Implementação enxuta — suficiente p/ produção leve)
-        from sklearn.preprocessing import MinMaxScaler
-        values = s_fit.values.reshape(-1,1)
-        scaler = MinMaxScaler(); scaled = scaler.fit_transform(values)
-        def _make_seq(arr, w):
-            X, y = [], []
-            for i in range(w, len(arr)):
-                X.append(arr[i-w:i])
-                y.append(arr[i])
-            return np.array(X), np.array(y)
-        X, y = _make_seq(scaled, window)
-        X = X.reshape((X.shape[0], X.shape[1], 1))
-        model_ = Sequential([LSTM(64, input_shape=(window,1)), Dense(1)])
-        model_.compile(optimizer="adam", loss="mse")
-        model_.fit(X, y, epochs=epochs, batch_size=batch, verbose=0)
-
-        # recursivo h passos à frente
-        seq = scaled[-window:].copy()
-        preds_scaled = []
-        for _ in range(horizon):
-            x_in = seq.reshape((1, window, 1))
-            y_hat = model_.predict(x_in, verbose=0)[0,0]
-            preds_scaled.append(y_hat)
-            seq = np.vstack([seq[1:], [y_hat]])
-        y_pred_inv = scaler.inverse_transform(np.array(preds_scaled).reshape(-1,1)).ravel()
-        y_pred_model = y_pred_inv.astype(float)
-
-    else:
-        # proteção: caso apareça modelo inesperado
-        raise RuntimeError(f"Modelo campeão não suportado para refit: {model}")
-
-    # 3) inversão para escala ORIGINAL (se necessário)
-    if inv:
-        y_future = inv(y_pred_model)
-    else:
-        y_future = y_pred_model
-
-    # saneamento final (sem negativos)
-    y_future = np.clip(np.asarray(y_future, dtype=float), 0.0, None)
-
-    # 4) DataFrame final com rótulos "Mês/AA"
-    last_ts = base_series.index[-1]
-    labels = _future_month_labels(last_ts, horizon)
-    return pd.DataFrame({"ds": labels, "y": y_future})
 
 # ============================
 # EXECUÇÃO LOCAL (EXEMPLO)
@@ -1050,8 +796,8 @@ def _refit_and_forecast_champion(base_series: pd.Series,
 if __name__ == "__main__":
     # 🔌 Streamlit hint:
     # - No app, essas strings viram parâmetros (input file uploader e pasta de saída).
-    CAMINHO = "/Users/felipe/Desktop/Faculdade/TCC/Códigos VS Code/Streamlit/(2017-2025) Série Temporal - Prod Cod 7 (A).xlsx"
-    SAIDA   = "/Users/felipe/Desktop/Faculdade/TCC/Códigos VS Code/Streamlit"
+    CAMINHO = r"C:\Users\vitor\OneDrive\TCC\Códigos VSCODE\Séries Temporais\Série Temporal - Prod Cod 7 (A).xlsx"
+    SAIDA   = r"C:\Users\vitor\OneDrive\TCC\Códigos VSCODE\Séries Temporais"
 
     with Timer("Rodando pipeline completo"):
         resultados = run_full_pipeline(
