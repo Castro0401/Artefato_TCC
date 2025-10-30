@@ -215,7 +215,7 @@ else:
 st.subheader("5) Testes ADF e KPSS (estacionariedade)")
 cT1, cT2 = st.columns(2)
 cT1.metric("ADF p-valor (H0: não estacionária)", f"{stn['adf_p']:.4f}" if stn["adf_p"]==stn["adf_p"] else "—")
-cT2.metric("KPSS p-valor (H0: estacionária)", f"{stn['kpss_p']:.4f}" if stn["kpss_p"]==stn["kpss_p"] else "—")
+cT2.metric("KPSS p-valor (H1: estacionária)", f"{stn['kpss_p']:.4f}" if stn["kpss_p"]==stn["kpss_p"] else "—")
 st.caption("→ **ADF p<0.05** sugere estacionariedade; **KPSS p<0.05** sugere não estacionariedade.")
 
 # =============================================================================

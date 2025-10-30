@@ -92,13 +92,28 @@ with row[2]:
 # 3) CONGELAMENTO DE HORIZONTE (intervalo)
 # =========================
 st.subheader("3) Congelamento de horizonte (intervalo)")
-frozen_default = get("frozen_range", (labels[0], labels[0])) if labels else ("", "")
-frozen_range = st.select_slider(
-    "Selecione o intervalo a congelar (inclusive)",
+
+# Início fixo = primeiro período da previsão
+start_label = labels[0]
+
+# Recupera um fim salvo anteriormente (se existir), mas força o início a ser o primeiro mês atual
+_saved = get("frozen_range", (start_label, start_label))
+saved_end = _saved[1] if isinstance(_saved, tuple) and len(_saved) == 2 else start_label
+if saved_end not in labels:
+    saved_end = start_label
+
+# Usuário escolhe APENAS o FIM do intervalo, com início fixo em start_label
+end_label = st.select_slider(
+    f"Selecione o **fim** do período a congelar (início fixo em {start_label})",
     options=labels,
-    value=frozen_default if isinstance(frozen_default, tuple) else (labels[0], labels[0]),
+    value=saved_end,
 )
+
+# Monta a tupla final (início fixo → fim escolhido)
+frozen_range = (start_label, end_label)
+
 st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
+
 
 # =========================
 # 4) PEDIDOS EM CARTEIRA
