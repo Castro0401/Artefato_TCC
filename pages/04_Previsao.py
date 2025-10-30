@@ -97,21 +97,21 @@ st.caption(
 # =============================
 st.sidebar.header("⚙️ Configurações")
 HORIZON = st.sidebar.selectbox("Horizonte (meses)", options=[6, 8, 12], index=0)
-FAST_MODE = st.sidebar.toggle("Modo rápido (grade reduzida)", value=True,
-                              help="Usa menos combinações de hiperparâmetros e menos réplicas de bootstrap.")
+FAST_MODE = st.sidebar.toggle(
+    "Modo rápido (grade reduzida)",
+    value=True,
+    help="Usa menos combinações de hiperparâmetros e menos réplicas de bootstrap."
+)
 SEASONAL_PERIOD = 12
 DO_ORIGINAL = True
 DO_LOG = True
 
 # =============================
 # Redução defensiva de grids quando FAST_MODE
-# (apenas aplica se os atributos existirem no pipeline; caso contrário, ignora)
+# (aplica só se os atributos existirem no pipeline; senão ignora)
 # =============================
-
 def apply_fast_grids(module):
-    """Tenta reduzir combinatórias de busca do pipeline de forma segura.
-    Não quebra se algum atributo não existir.
-    """
+    """Reduz combinatórias de busca do pipeline de forma segura."""
     # Random Forest
     if hasattr(module, "RF_N_ESTIMATORS_GRID"): module.RF_N_ESTIMATORS_GRID = [200]
     if hasattr(module, "RF_MAX_DEPTH_GRID"):    module.RF_MAX_DEPTH_GRID    = [None, 10]
@@ -129,12 +129,12 @@ def apply_fast_grids(module):
 
     # ARIMA/SARIMA
     for name, val in [
-        ("ARIMA_P_GRID", [0,1,2]),
-        ("ARIMA_D_GRID", [0,1]),
-        ("ARIMA_Q_GRID", [0,1,2]),
-        ("SEASONAL_P_GRID", [0,1]),
-        ("SEASONAL_D_GRID", [0,1]),
-        ("SEASONAL_Q_GRID", [0,1]),
+        ("ARIMA_P_GRID", [0, 1, 2]),
+        ("ARIMA_D_GRID", [0, 1]),
+        ("ARIMA_Q_GRID", [0, 1, 2]),
+        ("SEASONAL_P_GRID", [0, 1]),
+        ("SEASONAL_D_GRID", [0, 1]),
+        ("SEASONAL_Q_GRID", [0, 1]),
     ]:
         if hasattr(module, name): setattr(module, name, val)
 
@@ -164,7 +164,6 @@ def apply_fast_grids(module):
         ("LSTM_HIDDEN_UNITS", [32]),
     ]:
         if hasattr(module, name): setattr(module, name, val)
-
 
 # Bootstrap: reduz réplicas quando rápido; mantém ligado para comparabilidade
 if FAST_MODE:
@@ -225,8 +224,11 @@ if run:
 
         # Normaliza forecast para Series; se não vier do pipeline, usa sazonal ingênuo
         if isinstance(forecast, pd.DataFrame) and {"ds", "yhat"}.issubset(forecast.columns):
-            f_idx = (pd.to_datetime(forecast["ds"]) if not isinstance(forecast.index, pd.DatetimeIndex)
-                     else forecast.index)
+            f_idx = (
+                pd.to_datetime(forecast["ds"])
+                if not isinstance(forecast.index, pd.DatetimeIndex)
+                else forecast.index
+            )
             forecast_s = pd.Series(forecast["yhat"].astype(float).to_numpy(), index=f_idx)
         elif isinstance(forecast, pd.Series):
             forecast_s = forecast.astype(float)
@@ -234,8 +236,11 @@ if run:
             last = s_monthly[-SEASONAL_PERIOD:]
             reps = int((HORIZON + SEASONAL_PERIOD - 1) // SEASONAL_PERIOD)
             vals = np.tile(last.to_numpy(), reps)[:HORIZON]
-            f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1),
-                                  periods=HORIZON, freq="MS")
+            f_idx = pd.date_range(
+                s_monthly.index[-1] + pd.offsets.MonthBegin(1),
+                periods=HORIZON,
+                freq="MS",
+            )
             forecast_s = pd.Series(vals, index=f_idx)
 
         plot_df = pd.DataFrame({"Real": s_monthly, "Previsão": forecast_s})
@@ -250,5 +255,4 @@ if run:
 
     except Exception:
         st.error("Falha ao executar a previsão. Veja o traceback abaixo:")
-        st.code("
-".join(traceback.format_exc().splitlines()), language="text")
+        st.code("\n".join(traceback.format_exc().splitlines()), language="text")
