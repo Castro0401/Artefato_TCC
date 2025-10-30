@@ -2,23 +2,9 @@
 from __future__ import annotations
 """
 04_Previsao.py — versão final minimalista
-Objetivo: reproduzir exatamente os resultados do core/pipeline.py a partir dos
-dados validados no 01_Upload.py, com 1 clique e sem preocupações de UX.
-
-Requisitos do estado (preenchidos no 01_Upload.py):
-- st.session_state["ts_df_norm"]: DataFrame com colunas ["ds", "y"],
-  onde "ds" pode estar no formato de rótulo "Mon/YY" (ex.: "Set/25").
-- st.session_state["product_name"] (opcional) e st.session_state["upload_ok"] (bool).
-
-Estrutura esperada do projeto:
-artefato_tcc/
-  Menu.py
-  core/
-    pipeline.py
-    __init__.py           # (recomendado; pode ser vazio)
-  pages/
-    01_Upload.py
-    04_Previsao.py
+- Consome a série validada no 01_Upload.py via st.session_state["ts_df_norm"] (colunas: ["ds","y"])
+- Converte rótulos "Mon/YY" para datas (MS) e cria série mensal contínua (asfreq + interpolate)
+- Importa core/pipeline.py com caminho robusto
 """
 
 import sys
@@ -30,7 +16,7 @@ import streamlit as st
 # =============================
 # Inserir caminhos para importar core/pipeline
 # =============================
-ROOT = Path(__file__).resolve().parent.parent      # .../artefato_tcc
+ROOT = Path(__file__).resolve().parent.parent      # .../artefato_tcc (raiz)
 CORE = ROOT / "core"
 for p in (ROOT, CORE):
     sp = str(p)
@@ -152,5 +138,4 @@ if run:
 
     except Exception:
         st.error("Falha ao executar a previsão. Veja o traceback abaixo:")
-        st.code("
-".join(traceback.format_exc().splitlines()), language="text")
+        st.code("\n".join(traceback.format_exc().splitlines()), language="text")
