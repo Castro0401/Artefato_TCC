@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 """
-04_Previsao.py — robusto contra reruns:
-- submit via st.form (1 clique = 1 execução)
-- fingerprint de configuração (só roda se mudou + houve submit)
+04_Previsao.py — robusto e integrado ao MPS:
+- submit via st.form (1 clique = 1 execução) + fingerprint de configuração
 - snapshot/restauração de grades (modo rápido não “gruda”)
-- LSTM/Prophet desativados (espelha terminal)
-- progresso inclui bootstrap + console de logs ao vivo
-- resultado persiste em session_state (render sem reprocessar)
+- LSTM/Prophet desativados (para espelhar terminal)
+- console de logs FILTRADO (eventos essenciais)
+- barra de progresso proporcional (base × (bootstrap+1))
+- resultado persiste em session_state
+- botões: salvar previsão → MPS, ir para Inputs (05) e ir para MPS (06)
 """
 
 import sys, re, inspect, copy, contextlib, io, traceback, time, hashlib, json
@@ -45,6 +46,7 @@ ss.setdefault("last_cfg_key", None)
 # =============================
 if not ss.get("upload_ok"):
     st.error("Nenhuma série encontrada. Volte ao Passo 1 (Upload).")
+    st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
 _ts = ss.get("ts_df_norm")
@@ -123,7 +125,7 @@ with st.form(key="previsao_form"):
     BOOTSTRAP_BLOCK = 24
 
     # passos totais (incluindo bootstrap)
-    def _total_steps(mod) -> int:
+    def _base_steps(mod) -> int:
         base = 0
         if hasattr(mod,"CROSTON_ALPHAS"): base += len(mod.CROSTON_ALPHAS)
         if hasattr(mod,"SBA_ALPHAS"):     base += len(mod.SBA_ALPHAS)
@@ -135,77 +137,122 @@ with st.form(key="previsao_form"):
         if hasattr(mod,"SARIMA_GRID"):
             g = mod.SARIMA_GRID
             base += len(g["p"])*len(g["d"])*len(g["q"])*len(g["P"])*len(g["D"])*len(g["Q"])
-        return max(1, base*(N_BOOTSTRAP+1))
+        return max(1, base)
 
-    TOTAL = _total_steps(pipe)
-    st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações≈{TOTAL//(N_BOOTSTRAP+1)} | bootstrap={N_BOOTSTRAP} | total_passos≈{TOTAL}")
+    BASE = _base_steps(pipe)
+    TOTAL = BASE * (N_BOOTSTRAP + 1)
+    st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações≈{BASE} | bootstrap={N_BOOTSTRAP} | total_passos≈{TOTAL}")
 
     submitted = st.form_submit_button("▶️ Rodar previsão", type="primary", disabled=ss.is_running)
 
 # =============================
-# Console de logs e progresso
+# Console de logs (FILTRADO) e progresso proporcional
 # =============================
-prog = st.progress(0); prog_text = st.empty()
-log_box = st.expander("📜 Console de logs (ao vivo)", expanded=True)
-log_area = log_box.empty(); _log_lines: list[str] = []
+prog = st.progress(0)
+prog_text = st.empty()
+
+log_box = st.expander("📜 Console (passos essenciais)", expanded=False)
+log_area = log_box.empty()
+_raw_lines: list[str] = []
+
+_WHITELIST = [
+    r"==== PIPELINE INICIADO ====",
+    r"^Params:",
+    r"Realizando testes da série ORIGINAL",
+    r"^→\s*Croston|^→\s*SBA|^→\s*TSB|^→\s*RF|^→\s*SARIMAX",
+    r"Concluídos testes:\s*original",
+    r"Realizando testes da série .*log",
+    r"Concluídos testes:\s*log",
+    r"^•\s*Testes — bootstrap",
+    r"bootstrap\s*\(.*\)\s*—\s*fim",
+    r"===== CAMPEÃO",
+    r"==== PIPELINE FINALIZADO ====",
+    r"Linhas totais de experimentos:",
+    r"Resumo rápido por preprocess:",
+    r"(ERROR|EXCEPTION|Traceback)",
+]
+_WHITELIST_RE = [re.compile(p, re.IGNORECASE) for p in _WHITELIST]
+
+def _show_log_filtered():
+    filtered = []
+    for ln in _raw_lines[-500:]:
+        s = str(ln).strip()
+        if any(rx.search(s) for rx in _WHITELIST_RE):
+            filtered.append(s)
+    log_area.text("\n".join(filtered[-200:]))
 
 def _push_log(line: str):
-    _log_lines.append(str(line))
-    if len(_log_lines) > 400: del _log_lines[:len(_log_lines)-400]
-    log_area.text("\n".join(_log_lines))
+    _raw_lines.append(str(line))
+    _show_log_filtered()
 
 _original_log = getattr(pipe, "log", print)
-_step = {"done": 0}
-_bootstrap_pat = re.compile(r"bootstrap\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)
-_generic_pat   = re.compile(r"progresso\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 
-def _progress_from_msg(msg: str):
-    s = str(msg)
-    m = _bootstrap_pat.search(s)
-    if m:
-        cur, tot = int(m.group(1)), int(m.group(2))
-        base = max(1, TOTAL//(N_BOOTSTRAP+1))
-        target = min(TOTAL, base*(1+cur))
-        if target > _step["done"]: _step["done"] = target
-        return
-    m2 = _generic_pat.search(s)
-    if m2:
-        cur, tot = int(m2.group(1)), int(m2.group(2))
-        base = max(1, TOTAL//(N_BOOTSTRAP+1))
-        target = min(TOTAL, int(round(base*cur/max(1,tot))))
-        if target > _step["done"]: _step["done"] = target
+# padrões de progresso
+_RE_BOOT   = re.compile(r"bootstrap\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)   # i/N
+_RE_GEN    = re.compile(r"progresso\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)    # j/N (rodada base)
+
+_state = {
+    "base_done": 0,      # 0..BASE
+    "boot_cur": 0,       # 0..N_BOOTSTRAP
+    "BASE": BASE,
+    "TOTAL": TOTAL,
+    "N_BOOTSTRAP": N_BOOTSTRAP,
+}
+
+def _emit_progress():
+    BASE = _state["BASE"]; TOTAL = _state["TOTAL"]; N_BOOTSTRAP = _state["N_BOOTSTRAP"]
+    boot_part = 0.0 if N_BOOTSTRAP == 0 else (_state["boot_cur"] / float(N_BOOTSTRAP)) * BASE
+    done = min(TOTAL, int(round(_state["base_done"] + boot_part)))
+    pct = int(round(100 * done / max(1, TOTAL)))
+    prog.progress(min(100, max(0, pct)))
+    return pct
 
 def _patched_log(msg: str):
     s = str(msg)
     try:
-        _push_log(s); _progress_from_msg(s)
-        pct = int(round(_step["done"]*100/max(1,TOTAL)))
-        prog.progress(min(100,max(0,pct)))
-        prog_text.write(f"{pct}% — {s}" if pct<100 else "100% — concluído")
+        _push_log(s)
+
+        # rodada base: "progresso j/N" mapeia para 0..BASE
+        m = _RE_GEN.search(s)
+        if m:
+            j, N = int(m.group(1)), max(1, int(m.group(2)))
+            _state["base_done"] = min(_state["BASE"], int(round((_state["BASE"] * j) / N)))
+
+        # bootstrap: "bootstrap i/N" => cada réplica soma BASE/N
+        m2 = _RE_BOOT.search(s)
+        if m2:
+            i, N = int(m2.group(1)), max(1, int(m2.group(2)))
+            if i > _state["boot_cur"]:
+                _state["boot_cur"] = min(_state["N_BOOTSTRAP"], i)
+
+        pct = _emit_progress()
+        prog_text.write(f"{pct}% — {s}" if pct < 100 else "100% — concluído")
     except Exception:
         pass
     _original_log(msg)
 
 def _wire_progress():
     wired = False
-    if hasattr(pipe,"log"): pipe.log = _patched_log; wired = True
+    if hasattr(pipe, "log"):
+        pipe.log = _patched_log
+        wired = True
     extra = {}
     try:
         sig = inspect.signature(pipe.run_full_pipeline)
         if "progress_cb" in sig.parameters:
             def _cb(curr:int, total:int, desc:str=""):
-                pct = 0 if total==0 else int(round(curr*100/total))
-                prog.progress(min(100,max(0,pct)))
+                pct = 0 if total == 0 else int(round(curr * 100 / total))
+                prog.progress(min(100, max(0, pct)))
                 prog_text.write(f"{pct}% — {desc}" if desc else f"{pct}%")
             extra["progress_cb"] = _cb
-    except Exception: pass
+    except Exception:
+        pass
     return wired, extra
 
 # =============================
-# Fingerprint de configuração (evita run duplicado)
+# Fingerprint de configuração (evita run duplicado em reruns)
 # =============================
 def _cfg_key() -> str:
-    # usamos tamanhos de grades para evitar serializar objetos pesados
     def _len_or_zero(x): 
         try: return len(x)
         except Exception: return 0
@@ -238,8 +285,8 @@ if submitted and not ss.is_running and (ss.last_cfg_key != cfg_key or ss.last_re
                 resultados = pipe.run_full_pipeline(
                     data_input=s_monthly,
                     sheet_name=None, date_col=None, value_col=None,
-                    horizon=HORIZON, seasonal_period=12,
-                    do_original=True, do_log=True, do_bootstrap=True,
+                    horizon=HORIZON, seasonal_period=SEASONAL_PERIOD,
+                    do_original=DO_ORIGINAL, do_log=DO_LOG, do_bootstrap=True,
                     n_bootstrap=N_BOOTSTRAP, bootstrap_block=BOOTSTRAP_BLOCK,
                     save_dir=None,
                 )
@@ -289,13 +336,16 @@ if res is not None:
     if isinstance(forecast, pd.DataFrame) and {"ds","yhat"}.issubset(forecast.columns):
         f_idx = pd.to_datetime(forecast["ds"])
         forecast_s = pd.Series(forecast["yhat"].astype(float).to_numpy(), index=f_idx)
+        forecast_df_std = forecast.rename(columns={"yhat":"y"})[["ds","y"]].copy()
     elif isinstance(forecast, pd.Series):
         forecast_s = forecast.astype(float)
+        forecast_df_std = pd.DataFrame({"ds": forecast.index, "y": forecast.values})
     else:
-        last = s_monthly[-12:]; reps = int((HORIZON+12-1)//12)
+        last = s_monthly[-SEASONAL_PERIOD:]; reps = int((HORIZON+SEASONAL_PERIOD-1)//SEASONAL_PERIOD)
         vals = np.tile(last.to_numpy(), reps)[:HORIZON]
         f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=HORIZON, freq="MS")
         forecast_s = pd.Series(vals, index=f_idx)
+        forecast_df_std = pd.DataFrame({"ds": f_idx, "y": vals})
 
     plot_df = pd.DataFrame({"Real": s_monthly, "Previsão": forecast_s})
     st.subheader("📈 Histórico + Previsão")
@@ -303,3 +353,28 @@ if res is not None:
 
     st.subheader("📋 Experimentos (resumo)")
     st.dataframe(res.reset_index(drop=True), use_container_width=True)
+
+    # =============================
+    # 🔗 Integração com MPS: salvar e navegar
+    # =============================
+    st.divider()
+    st.subheader("➡️ Próximos passos")
+
+    c_save, c_inputs, c_mps = st.columns([1.3, 1.3, 1.0])
+
+    with c_save:
+        can_save = forecast_df_std is not None and len(forecast_df_std) > 0
+        if st.button("💾 Salvar previsão para o MPS", disabled=not can_save, use_container_width=True):
+            st.session_state["forecast_df"] = forecast_df_std.copy()
+            st.session_state["forecast_h"] = int(HORIZON)
+            st.session_state["forecast_committed"] = True
+            st.success("Previsão salva para o MPS.")
+
+    with c_inputs:
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️", use_container_width=True)
+
+    with c_mps:
+        st.page_link("pages/06_MPS.py", label="🗓️ Ir para o MPS", icon="🗓️", use_container_width=True)
+
+    if not st.session_state.get("forecast_committed", False):
+        st.info("Clique em **Salvar previsão para o MPS** antes de avançar.", icon="ℹ️")
