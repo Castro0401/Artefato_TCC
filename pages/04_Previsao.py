@@ -1,17 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-"""
-04_Previsao.py — Paridade de terminal + UX e depuração:
-- Roda SEMPRE ao clicar (sem cache de resultado).
-- Restaura grades originalmente do pipeline e só depois aplica Modo Rápido.
-- Controles: horizonte, modo rápido, aplicar log, bootstrap e réplicas (limite depende do modo).
-- Nota explicativa abaixo do slider de réplicas.
-- Progresso acumulativo por rodadas e famílias; console filtrado.
-- Gráfico com cores fixas (Real=azul escuro, Previsão=azul claro).
-- Download CSV com todos os experimentos (não mostra a tabela enorme).
-- Próximos passos: botão “Salvar previsão” em cima; link “Inputs do MPS” abaixo.
-- Painel de depuração com flags efetivas + tempo de execução (temporizador).
-"""
 
 import sys, re, copy, contextlib, io, traceback, hashlib, json, time
 from pathlib import Path
@@ -42,7 +30,7 @@ ss.setdefault("last_result", None)
 
 # ===== série do upload
 if not ss.get("upload_ok"):
-    st.error("Nenhuma série encontrada. Volte ao Passo 1 (Upload).")
+    st.warning("Nenhuma série encontrada. Volte ao Passo 1 (Upload).")
     st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
     st.stop()
 
@@ -392,29 +380,31 @@ if res is not None:
     except Exception:
         st.info("Resultados dos experimentos indisponíveis para exportação.")
 
-    # =============================
-    # 🔗 Próximos passos (botão em cima; link abaixo)
-    # =============================
-    st.divider()
-    st.subheader("➡️ Próximos passos")
+# =============================
+# 🔗 Próximos passos (layout igual ao Inputs do MPS)
+# =============================
+st.divider()
+st.subheader("➡️ Próximos passos")
 
-    # Linha 1 — botão Salvar (centralizado)
-    c1, c2, c3 = st.columns([2, 1, 2])
-    with c2:
-        can_save = forecast_df_std is not None and len(forecast_df_std) > 0
-        if st.button("💾 Salvar previsão para o MPS", use_container_width=True, disabled=not can_save):
-            st.session_state["forecast_df"] = forecast_df_std.copy()
-            st.session_state["forecast_h"] = int(HORIZON)
-            st.session_state["forecast_committed"] = True
-            st.success("Previsão salva para o MPS.")
+# Linha 1 — botão Salvar (centralizado, vermelho tipo "primary")
+c1, c2, c3 = st.columns([2, 1, 2])
+with c2:
+    can_save = forecast_df_std is not None and len(forecast_df_std) > 0
+    if st.button("💾 Salvar previsão para o MPS", use_container_width=True, type="primary", disabled=not can_save):
+        st.session_state["forecast_df"] = forecast_df_std.copy()
+        st.session_state["forecast_h"] = int(HORIZON)
+        st.session_state["forecast_committed"] = True
+        st.success("Previsão salva para o MPS.")
 
-    # Espaço entre as linhas
-    st.markdown("<div style='height: 10px'></div>", unsafe_allow_html=True)
+# Linha divisória e espaçamento
+st.markdown("---", unsafe_allow_html=True)
+st.markdown("<div style='height: 5px'></div>", unsafe_allow_html=True)
 
-    # Linha 2 — link para Inputs do MPS (centralizado)
-    r1, r2, r3 = st.columns([2, 1, 2])
-    with r2:
-        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
+# Linha 2 — link para Inputs do MPS (centralizado)
+r1, r2, r3 = st.columns([2, 1, 2])
+with r2:
+    st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
 
-    if not st.session_state.get("forecast_committed", False):
-        st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
+# Aviso para salvar antes de avançar
+if not st.session_state.get("forecast_committed", False):
+    st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
