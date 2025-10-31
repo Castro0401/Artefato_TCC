@@ -380,31 +380,31 @@ if res is not None:
     except Exception:
         st.info("Resultados dos experimentos indisponíveis para exportação.")
 
-# =============================
-# 🔗 Próximos passos (layout igual ao Inputs do MPS)
-# =============================
-st.divider()
-st.subheader("➡️ Próximos passos")
+    # =============================
+    # 🔗 Próximos passos (layout igual ao Inputs do MPS)
+    # =============================
+    st.divider()
+    st.subheader("➡️ Próximos passos")
 
-# Linha 1 — botão Salvar (centralizado, vermelho tipo "primary")
-c1, c2, c3 = st.columns([2, 1, 2])
-with c2:
-    can_save = forecast_df_std is not None and len(forecast_df_std) > 0
-    if st.button("💾 Salvar previsão para o MPS", use_container_width=True, type="primary", disabled=not can_save):
-        st.session_state["forecast_df"] = forecast_df_std.copy()
-        st.session_state["forecast_h"] = int(HORIZON)
-        st.session_state["forecast_committed"] = True
-        st.success("Previsão salva para o MPS.")
+    # Linha 1 — botão Salvar (centralizado, vermelho tipo "primary")
+    c1, c2, c3 = st.columns([2, 1, 2])
+    with c2:
+        can_save = forecast_df_std is not None and len(forecast_df_std) > 0
+        if st.button("💾 Salvar previsão para o MPS", use_container_width=True, type="primary", disabled=not can_save):
+            st.session_state["forecast_df"] = forecast_df_std.copy()
+            st.session_state["forecast_h"] = int(HORIZON)
+            st.session_state["forecast_committed"] = True
+            st.success("Previsão salva para o MPS.")
 
-# Linha divisória e espaçamento
-st.markdown("---", unsafe_allow_html=True)
-st.markdown("<div style='height: 5px'></div>", unsafe_allow_html=True)
+    # Linha divisória e espaçamento
+    st.markdown("---", unsafe_allow_html=True)
+    st.markdown("<div style='height: 5px'></div>", unsafe_allow_html=True)
 
-# Linha 2 — link para Inputs do MPS (centralizado)
-r1, r2, r3 = st.columns([2, 1, 2])
-with r2:
-    st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
+    # Linha 2 — link para Inputs do MPS (centralizado)
+    r1, r2, r3 = st.columns([2, 1, 2])
+    with r2:
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
 
-# Aviso para salvar antes de avançar
-if not st.session_state.get("forecast_committed", False):
-    st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
+    # Aviso para salvar antes de avançar
+    if not st.session_state.get("forecast_committed", False):
+        st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
