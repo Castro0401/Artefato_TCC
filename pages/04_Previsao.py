@@ -408,7 +408,7 @@ if res is not None:
     st.markdown("---")  # separador fino
 
     # Linha 2 — Link para Inputs do MPS (à esquerda, sem colunas)
-    st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
+    st.page_link("pages/05_Inputs_MPS.py", label="➡️ Ir para Inputs do MPS", icon="⚙️")
 
     # Aviso
     if not st.session_state.get("forecast_committed", False):
