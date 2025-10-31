@@ -30,11 +30,18 @@ if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state
 fcst = st.session_state["forecast_df"][["ds", "y"]].copy()
 horizon = int(st.session_state["forecast_h"])
 
-# rótulos "brutos" (podem ser Timestamp)
-labels_raw = list(fcst["ds"])
-# rótulos como string (para UI / JSON do Streamlit)
-labels_str = [str(x) for x in labels_raw]
-# mapas
+# Garantimos que 'ds' está em Timestamp mensal (MS)
+ds_ts = pd.to_datetime(fcst["ds"]).dt.to_period("M").dt.to_timestamp()
+
+# rótulo bonito MÊS/ANO em PT-BR (ex.: Set/25)
+PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+def fmt_mmyy(ts: pd.Timestamp) -> str:
+    m = ts.month
+    yy = ts.year % 100
+    return f"{PT_MON[m-1]}/{yy:02d}"
+
+labels_raw: list[pd.Timestamp] = ds_ts.tolist()          # valores "reais"
+labels_str: list[str] = [fmt_mmyy(ts) for ts in ds_ts]    # rótulos para UI
 idx_by_label_str = {s: i for i, s in enumerate(labels_str)}
 
 st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} mês(es)**.")
@@ -100,11 +107,21 @@ with row[2]:
 # =========================
 st.subheader("3) Congelamento de horizonte (intervalo)")
 
-start_label_raw = labels_raw[0]
 start_label_str = labels_str[0]
 
+# tenta reaproveitar “fim” salvo (que pode estar em formato antigo)
 _saved = get("frozen_range", (start_label_str, start_label_str))
 saved_end_str = _saved[1] if isinstance(_saved, tuple) and len(_saved) == 2 else start_label_str
+
+# migração: se salvo antigo não existir em labels_str, tenta converter
+if saved_end_str not in labels_str:
+    try:
+        ts_try = pd.to_datetime(saved_end_str, errors="coerce")
+        if pd.notna(ts_try):
+            saved_end_str = fmt_mmyy(ts_try.to_period("M").to_timestamp())
+    except Exception:
+        saved_end_str = start_label_str
+
 if saved_end_str not in labels_str:
     saved_end_str = start_label_str
 
@@ -122,18 +139,18 @@ st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
 # =========================
 st.subheader("4) Pedidos firmes — Em carteira")
 
-# inicia/recupera
+# inicia/recupera; mantemos ds “raw” como Timestamp; exibimos colunas com rótulos bonitos
 if "mps_firm_orders" in st.session_state:
     current_orders = st.session_state["mps_firm_orders"].copy()
-    # sincroniza com labels atuais
-    # current_orders['ds'] pode ser Timestamp; força string para comparar com labels_str
-    cur_labels_str = [str(x) for x in current_orders["ds"].tolist()]
+    # sincroniza com labels atuais (comparando pelo rótulo bonito)
+    cur_labels_str = [fmt_mmyy(pd.to_datetime(x).to_period("M").to_timestamp())
+                      for x in current_orders["ds"].tolist()]
     if cur_labels_str != labels_str:
         current_orders = pd.DataFrame({"ds": labels_raw, "y": [0]*len(labels_raw)})
 else:
     current_orders = pd.DataFrame({"ds": labels_raw, "y": [0]*len(labels_raw)})
 
-# editor em linha única: colunas são strings
+# editor em linha única: colunas são strings "MÊS/ANO"
 orders_row_df = pd.DataFrame([current_orders["y"].tolist()], index=["Em carteira"], columns=labels_str)
 orders_row_df = st.data_editor(
     orders_row_df,
@@ -144,7 +161,7 @@ orders_row_df = st.data_editor(
 )
 orders_row_df = orders_row_df.fillna(0)
 
-# reconstrói df (ds original, y)
+# reconstrói df (ds original, y) preservando a ordem de labels_raw
 values = orders_row_df.loc["Em carteira"].astype(int).reindex(labels_str).tolist()
 orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 
@@ -178,8 +195,9 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
         "z_choice": z_choice,
         "cv_pct": float(cv_pct) if cv_pct is not None else None,
         "sigma_abs": float(sigma_abs) if sigma_abs is not None else None,
-        "frozen_range": tuple(frozen_range),  # strings (compatível com UI)
-        # custos (para futura consolidação)
+        # guardamos strings bonitas (compatível com a UI)
+        "frozen_range": tuple(frozen_range),
+        # custos
         "unit_cost": float(unit_cost),
         "holding_rate": float(holding_rate),
         "order_cost": float(order_cost),
