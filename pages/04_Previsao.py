@@ -6,7 +6,7 @@ from __future__ import annotations
 - snapshot/restauração de grades (modo rápido não “gruda”)
 - LSTM/Prophet desativados (para espelhar terminal)
 - console de logs FILTRADO (eventos essenciais)
-- barra de progresso proporcional (base × (bootstrap+1))
+- barra de progresso proporcional e ACUMULATIVA (base × (bootstrap+1))
 - resultado persiste em session_state
 - botões: salvar previsão → MPS, ir para Inputs (05) e ir para MPS (06)
 """
@@ -146,7 +146,7 @@ with st.form(key="previsao_form"):
     submitted = st.form_submit_button("▶️ Rodar previsão", type="primary", disabled=ss.is_running)
 
 # =============================
-# Console de logs (FILTRADO) e progresso proporcional
+# Console de logs (FILTRADO) e progresso acumulativo
 # =============================
 prog = st.progress(0)
 prog_text = st.empty()
@@ -187,23 +187,33 @@ def _push_log(line: str):
 
 _original_log = getattr(pipe, "log", print)
 
-# padrões de progresso
+# padrões de progresso do log
 _RE_BOOT   = re.compile(r"bootstrap\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)   # i/N
 _RE_GEN    = re.compile(r"progresso\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)    # j/N (rodada base)
 
+# --- Progresso acumulativo corrigido ---
 _state = {
     "base_done": 0,      # 0..BASE
     "boot_cur": 0,       # 0..N_BOOTSTRAP
+    "progress_main": 0,  # fração 0..1 da parte principal
+    "progress_boot": 0,  # fração 0..1 do bootstrap
     "BASE": BASE,
     "TOTAL": TOTAL,
     "N_BOOTSTRAP": N_BOOTSTRAP,
 }
 
 def _emit_progress():
-    BASE = _state["BASE"]; TOTAL = _state["TOTAL"]; N_BOOTSTRAP = _state["N_BOOTSTRAP"]
-    boot_part = 0.0 if N_BOOTSTRAP == 0 else (_state["boot_cur"] / float(N_BOOTSTRAP)) * BASE
-    done = min(TOTAL, int(round(_state["base_done"] + boot_part)))
-    pct = int(round(100 * done / max(1, TOTAL)))
+    """Calcula o progresso acumulativo total com base em base_done + bootstrap."""
+    BASE = _state["BASE"]
+    N_BOOTSTRAP = _state["N_BOOTSTRAP"]
+    # parte principal: 0..1
+    base_ratio = _state["progress_main"]
+    # parte bootstrap: 0..1
+    boot_ratio = _state["progress_boot"]
+    # peso da parte base é 1/(1+N), e o do bootstrap é N/(1+N)
+    # equivalendo a TOTAL = BASE * (1 + N_BOOTSTRAP)
+    total_ratio = min(1.0, (base_ratio + (boot_ratio * N_BOOTSTRAP)) / (1.0 + N_BOOTSTRAP))
+    pct = int(round(100 * total_ratio))
     prog.progress(min(100, max(0, pct)))
     return pct
 
@@ -212,18 +222,23 @@ def _patched_log(msg: str):
     try:
         _push_log(s)
 
-        # rodada base: "progresso j/N" mapeia para 0..BASE
+        # Detecta progresso base: "progresso j/N"
         m = _RE_GEN.search(s)
         if m:
             j, N = int(m.group(1)), max(1, int(m.group(2)))
-            _state["base_done"] = min(_state["BASE"], int(round((_state["BASE"] * j) / N)))
+            progress_val = j / float(N)
+            if progress_val > _state["progress_main"]:
+                _state["progress_main"] = progress_val
+                _state["base_done"] = int(round(progress_val * _state["BASE"]))
 
-        # bootstrap: "bootstrap i/N" => cada réplica soma BASE/N
+        # Detecta progresso do bootstrap: "bootstrap i/N"
         m2 = _RE_BOOT.search(s)
         if m2:
             i, N = int(m2.group(1)), max(1, int(m2.group(2)))
-            if i > _state["boot_cur"]:
-                _state["boot_cur"] = min(_state["N_BOOTSTRAP"], i)
+            progress_val = i / float(N)
+            if progress_val > _state["progress_boot"]:
+                _state["progress_boot"] = progress_val
+                _state["boot_cur"] = i
 
         pct = _emit_progress()
         prog_text.write(f"{pct}% — {s}" if pct < 100 else "100% — concluído")
