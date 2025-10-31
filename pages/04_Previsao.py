@@ -398,7 +398,7 @@ if res is not None:
     """, unsafe_allow_html=True)
 
     # Linha 1 — botão Salvar, alinhado à esquerda com uma margem
-    _ margin, col_main = st.columns([1, 9])
+    _margin, col_main = st.columns([1, 9])
     with col_main:
         can_save = forecast_df_std is not None and len(forecast_df_std) > 0
         if st.button("💾 Salvar previsão para o MPS", type="primary", disabled=not can_save):
@@ -410,7 +410,7 @@ if res is not None:
     st.markdown("---")  # linha separadora
 
     # Linha 2 — link para Inputs do MPS, também à esquerda (com a mesma margem)
-    _ margin2, col_main2 = st.columns([1, 9])
+    _margin2, col_main2 = st.columns([1, 9])
     with col_main2:
         st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
 
