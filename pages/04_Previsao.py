@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 """
-04_Previsao.py — Paridade de terminal + controles LOG/BOOTSTRAP e UX polida:
-- Controles: horizonte, modo rápido, aplicar log (checkbox), bootstrap (checkbox) e réplicas (slider dependente do modo).
-- Modo rápido OFF (padrão): não altera grades; usa o que o pipeline define (inclui Prophet/LSTM se o pipeline tiver).
-- Progresso acumulativo por rodadas (original, log opcional, bootstrap opcional) e famílias (Croston, SBA, TSB, RF, SARIMAX).
-- Console de logs filtrado (essenciais).
-- Gráfico com cores fixas: Real = azul escuro, Previsão = azul claro.
-- “Experimentos” oferece apenas download em CSV (sem plotar a tabela enorme).
-- “Salvar previsão para o MPS” alinhado à esquerda e link para “Inputs do MPS” à direita.
+04_Previsao.py — Paridade de terminal + UX e depuração:
+- Roda SEMPRE ao clicar (sem cache de resultado).
+- Restaura grades originalmente do pipeline e só depois aplica Modo Rápido.
+- Controles: horizonte, modo rápido, aplicar log, bootstrap e réplicas (limite depende do modo).
+- Nota explicativa abaixo do slider de réplicas.
+- Progresso acumulativo por rodadas e famílias; console filtrado.
+- Gráfico com cores fixas (Real=azul escuro, Previsão=azul claro).
+- Download CSV com todos os experimentos (não mostra a tabela enorme).
+- Próximos passos: botão “Salvar previsão” em cima; link “Inputs do MPS” abaixo.
+- Painel de depuração com flags efetivas + tempo de execução (temporizador).
 """
 
-import sys, re, copy, contextlib, io, traceback, hashlib, json
+import sys, re, copy, contextlib, io, traceback, hashlib, json, time
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -37,7 +39,6 @@ st.title("🔮 Passo 2 — Previsão")
 ss = st.session_state
 ss.setdefault("is_running", False)
 ss.setdefault("last_result", None)
-ss.setdefault("last_cfg_key", None)
 
 # ===== série do upload
 if not ss.get("upload_ok"):
@@ -96,7 +97,6 @@ def apply_fast_grids(module):
 # ===== form (config)
 with st.form(key="previsao_form"):
     st.sidebar.header("⚙️ Configurações")
-
     HORIZON = st.sidebar.selectbox("Horizonte (meses)", [6,8,12], index=0)
 
     FAST_MODE = st.sidebar.toggle(
@@ -109,29 +109,28 @@ with st.form(key="previsao_form"):
     DO_LOG = st.sidebar.checkbox("Aplicar log (testar série log-transformada)", value=True)
     DO_BOOTSTRAP = st.sidebar.checkbox("Ativar bootstrap (re-amostragem)", value=True)
 
-    # Slider de réplicas dependente do modo
+    # *** Ordem garantida: restaura grades completas e só depois aplica rápido, se for o caso
+    restore_full_grids(pipe)
     if FAST_MODE:
-        max_boot = 10
-        default_boot = 10
         apply_fast_grids(pipe)
+        max_boot, default_boot = 10, 10
     else:
-        max_boot = 50
-        default_boot = 20
-        restore_full_grids(pipe)
+        max_boot, default_boot = 50, 20
 
     if DO_BOOTSTRAP:
         N_BOOTSTRAP = st.sidebar.slider(
-    "Réplicas do bootstrap",
-    min_value=1, max_value=max_boot, value=default_boot, step=1,
-    help="Reduzir as réplicas acelera a execução, mas pode não encontrar o melhor modelo."
-)
+            "Réplicas do bootstrap",
+            min_value=1, max_value=max_boot, value=default_boot, step=1,
+            help="Reduzir as réplicas acelera a execução, mas pode não encontrar o melhor modelo."
+        )
+        st.sidebar.caption(
+            "⚠️ **Menos réplicas** → roda mais rápido, mas **pode não encontrar** o melhor modelo."
+        )
     else:
         N_BOOTSTRAP = 0
 
-    SEASONAL_PERIOD = 12  # igual ao terminal
-
-    # cálculo só para exibir na UI (não afeta execução)
-    def _len(x): 
+    # Exibição (informativa)
+    def _len(x):
         try: return len(x)
         except Exception: return 0
     base = 0
@@ -242,47 +241,69 @@ def _patched_log(msg: str):
 def _wire_progress():
     if hasattr(pipe, "log"): pipe.log = _patched_log
 
-# ===== fingerprint
-def _cfg_key() -> str:
-    def _len_or_zero(x): 
-        try: return len(x)
-        except Exception: return 0
-    g = {
-        "HORIZON": HORIZON, "FAST_MODE": FAST_MODE,
-        "DO_LOG": DO_LOG, "DO_BOOTSTRAP": DO_BOOTSTRAP, "N_BOOTSTRAP": N_BOOTSTRAP,
-        "SEASONAL_PERIOD": 12,
-        "CROSTON": _len_or_zero(getattr(pipe,"CROSTON_ALPHAS",[])),
-        "SBA": _len_or_zero(getattr(pipe,"SBA_ALPHAS",[])),
-        "TSB_A": _len_or_zero(getattr(pipe,"TSB_ALPHA_GRID",[])),
-        "TSB_B": _len_or_zero(getattr(pipe,"TSB_BETA_GRID",[])),
-        "RF_L": _len_or_zero(getattr(pipe,"RF_LAGS_GRID",[])),
-        "RF_N": _len_or_zero(getattr(pipe,"RF_N_ESTIMATORS_GRID",[])),
-        "RF_D": _len_or_zero(getattr(pipe,"RF_MAX_DEPTH_GRID",[])),
-        "SARIMA": {k:_len_or_zero(getattr(pipe,"SARIMA_GRID",{}).get(k,[])) for k in ["p","d","q","P","D","Q"]},
-    }
-    return hashlib.sha1(json.dumps(g, sort_keys=True).encode()).hexdigest()
-cfg_key = _cfg_key()
-
-# ===== execução (paridade total com terminal + flags escolhidas)
-if submitted and not ss.is_running and (ss.last_cfg_key != cfg_key or ss.last_result is None):
+# ===== execução (sempre reroda ao clicar)
+if submitted and not ss.is_running:
     ss.is_running = True
+    ss.last_result = None
     try:
         _wire_progress()
+
+        # Painel de depuração — parâmetros que SERÃO passados
+        debug_info = {
+            "horizon": int(HORIZON),
+            "seasonal_period": 12,
+            "do_original": True,
+            "do_log": bool(DO_LOG),
+            "do_bootstrap": bool(DO_BOOTSTRAP),
+            "n_bootstrap": int(N_BOOTSTRAP),
+            "FAST_MODE": bool(FAST_MODE),
+            "grid_sizes": {
+                "Croston": len(getattr(pipe, "CROSTON_ALPHAS", [])),
+                "SBA": len(getattr(pipe, "SBA_ALPHAS", [])),
+                "TSB": (
+                    len(getattr(pipe, "TSB_ALPHA_GRID", [])) *
+                    len(getattr(pipe, "TSB_BETA_GRID", []))
+                ),
+                "RF": (
+                    len(getattr(pipe, "RF_LAGS_GRID", [])) *
+                    len(getattr(pipe, "RF_N_ESTIMATORS_GRID", [])) *
+                    len(getattr(pipe, "RF_MAX_DEPTH_GRID", []))
+                ),
+                "SARIMAX": (
+                    len(getattr(pipe, "SARIMA_GRID", {}).get("p", [])) *
+                    len(getattr(pipe, "SARIMA_GRID", {}).get("d", [])) *
+                    len(getattr(pipe, "SARIMA_GRID", {}).get("q", [])) *
+                    len(getattr(pipe, "SARIMA_GRID", {}).get("P", [])) *
+                    len(getattr(pipe, "SARIMA_GRID", {}).get("D", [])) *
+                    len(getattr(pipe, "SARIMA_GRID", {}).get("Q", []))
+                )
+            }
+        }
+        with st.expander("🔎 Depuração — parâmetros efetivos", expanded=False):
+            st.json(debug_info)
+
+        t0 = time.perf_counter()
         with st.spinner("Executando pipeline…"):
             _stdout, _stderr = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(_stdout), contextlib.redirect_stderr(_stderr):
                 resultados = pipe.run_full_pipeline(
                     data_input=s_monthly,
                     sheet_name=None, date_col=None, value_col=None,
-                    horizon=HORIZON, seasonal_period=12,
-                    do_original=True, do_log=DO_LOG, do_bootstrap=DO_BOOTSTRAP,
-                    n_bootstrap=N_BOOTSTRAP, bootstrap_block=24,
+                    horizon=int(HORIZON), seasonal_period=12,
+                    do_original=True,
+                    do_log=bool(DO_LOG),
+                    do_bootstrap=bool(DO_BOOTSTRAP),
+                    n_bootstrap=int(N_BOOTSTRAP),
+                    bootstrap_block=24,
                     save_dir=None,
                 )
             if _stdout.getvalue(): _push_log(_stdout.getvalue())
             if _stderr.getvalue(): _push_log(_stderr.getvalue())
+        elapsed = time.perf_counter() - t0
         prog.progress(100); prog_text.write("100% — concluído")
-        ss.last_result = resultados; ss.last_cfg_key = cfg_key
+        st.caption(f"⏱️ Tempo de execução: {elapsed:.1f}s")
+
+        ss.last_result = resultados
     except Exception:
         st.error("Falha ao executar a previsão. Traceback abaixo:")
         st.code("\n".join(traceback.format_exc().splitlines()), language="text")
@@ -295,7 +316,7 @@ res = ss.get("last_result")
 if res is not None:
     champ = res.attrs.get("champion", {})
     modelo_nome = champ.get("model", "Desconhecido")
-    st.subheader(f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if FAST_MODE else ""))
+    st.subheader(f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if st.session_state.get('FAST_MODE', False) else ""))
 
     def _fmt(x):
         try: return f"{float(x):.4g}"
@@ -371,19 +392,29 @@ if res is not None:
     except Exception:
         st.info("Resultados dos experimentos indisponíveis para exportação.")
 
-    # próximos passos (layout centralizado)
-    st.divider(); st.subheader("➡️ Próximos passos")
-    _spL, col_save, _gap, col_inputs, _spR = st.columns([1, 1, 0.4, 1, 1])
-    with col_save:
+    # =============================
+    # 🔗 Próximos passos (botão em cima; link abaixo)
+    # =============================
+    st.divider()
+    st.subheader("➡️ Próximos passos")
+
+    # Linha 1 — botão Salvar (centralizado)
+    c1, c2, c3 = st.columns([2, 1, 2])
+    with c2:
         can_save = forecast_df_std is not None and len(forecast_df_std) > 0
-        st.divider()
-        if st.button("💾 Salvar previsão para o MPS", disabled=not can_save):
+        if st.button("💾 Salvar previsão para o MPS", use_container_width=True, disabled=not can_save):
             st.session_state["forecast_df"] = forecast_df_std.copy()
             st.session_state["forecast_h"] = int(HORIZON)
             st.session_state["forecast_committed"] = True
             st.success("Previsão salva para o MPS.")
-    with col_inputs:
-        st.divider()
-        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS")
+
+    # Espaço entre as linhas
+    st.markdown("<div style='height: 10px'></div>", unsafe_allow_html=True)
+
+    # Linha 2 — link para Inputs do MPS (centralizado)
+    r1, r2, r3 = st.columns([2, 1, 2])
+    with r2:
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
+
     if not st.session_state.get("forecast_committed", False):
         st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
