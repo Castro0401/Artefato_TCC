@@ -206,5 +206,12 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
 
+# -------- Navegação --------
 st.divider()
-st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)", icon="🗓️")
+
+# Linha 1: botões de navegação lado a lado (esquerda = voltar; direita = avançar)
+c_back, c_next = st.columns([1, 1])
+with c_back:
+    st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão", icon="🔮")
+with c_next:
+    st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)", icon="🗓️")
