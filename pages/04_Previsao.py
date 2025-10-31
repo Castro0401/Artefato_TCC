@@ -120,9 +120,11 @@ with st.form(key="previsao_form"):
         restore_full_grids(pipe)
 
     if DO_BOOTSTRAP:
-        N_BOOTSTRAP = st.sidebar.slider("Réplicas do bootstrap",
-                                        min_value=1, max_value=max_boot,
-                                        value=default_boot, step=1)
+        N_BOOTSTRAP = st.sidebar.slider(
+    "Réplicas do bootstrap",
+    min_value=1, max_value=max_boot, value=default_boot, step=1,
+    help="Reduzir as réplicas acelera a execução, mas pode não encontrar o melhor modelo."
+)
     else:
         N_BOOTSTRAP = 0
 
@@ -374,12 +376,14 @@ if res is not None:
     _spL, col_save, _gap, col_inputs, _spR = st.columns([1, 1, 0.4, 1, 1])
     with col_save:
         can_save = forecast_df_std is not None and len(forecast_df_std) > 0
+        st.divider()
         if st.button("💾 Salvar previsão para o MPS", disabled=not can_save):
             st.session_state["forecast_df"] = forecast_df_std.copy()
             st.session_state["forecast_h"] = int(HORIZON)
             st.session_state["forecast_committed"] = True
             st.success("Previsão salva para o MPS.")
     with col_inputs:
-        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️")
+        st.divider()
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS")
     if not st.session_state.get("forecast_committed", False):
         st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
