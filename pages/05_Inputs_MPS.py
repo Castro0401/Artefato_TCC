@@ -29,8 +29,14 @@ if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state
 # =========================
 fcst = st.session_state["forecast_df"][["ds", "y"]].copy()
 horizon = int(st.session_state["forecast_h"])
-labels = fcst["ds"].tolist()
-product_name = st.session_state.get("product_name", None)  # <— ADICIONE ESTA LINHA
+
+# rótulos "brutos" (podem ser Timestamp)
+labels_raw = list(fcst["ds"])
+# rótulos como string (para UI / JSON do Streamlit)
+labels_str = [str(x) for x in labels_raw]
+# mapas
+idx_by_label_str = {s: i for i, s in enumerate(labels_str)}
+
 st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} mês(es)**.")
 
 # defaults
@@ -43,6 +49,7 @@ def get(k, dv): return defaults.get(k, dv)
 st.subheader("1) Item e políticas padrão")
 c1, c2, c3, c4 = st.columns(4)
 with c1:
+    product_name = st.session_state.get("product_name", None)
     default_item = get("item_name", product_name if product_name else "Item (sem nome)")
     item_name = st.text_input("Item (nome)", value=default_item)
 with c2:
@@ -93,52 +100,53 @@ with row[2]:
 # =========================
 st.subheader("3) Congelamento de horizonte (intervalo)")
 
-# Início fixo = primeiro período da previsão
-start_label = labels[0]
+start_label_raw = labels_raw[0]
+start_label_str = labels_str[0]
 
-# Recupera um fim salvo anteriormente (se existir), mas força o início a ser o primeiro mês atual
-_saved = get("frozen_range", (start_label, start_label))
-saved_end = _saved[1] if isinstance(_saved, tuple) and len(_saved) == 2 else start_label
-if saved_end not in labels:
-    saved_end = start_label
+_saved = get("frozen_range", (start_label_str, start_label_str))
+saved_end_str = _saved[1] if isinstance(_saved, tuple) and len(_saved) == 2 else start_label_str
+if saved_end_str not in labels_str:
+    saved_end_str = start_label_str
 
-# Usuário escolhe APENAS o FIM do intervalo, com início fixo em start_label
-end_label = st.select_slider(
-    f"Selecione o **fim** do período a congelar (início fixo em {start_label})",
-    options=labels,
-    value=saved_end,
+end_label_str = st.select_slider(
+    f"Selecione o **fim** do período a congelar (início fixo em {start_label_str})",
+    options=labels_str,
+    value=saved_end_str,
 )
 
-# Monta a tupla final (início fixo → fim escolhido)
-frozen_range = (start_label, end_label)
-
+frozen_range = (start_label_str, end_label_str)
 st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
-
 
 # =========================
 # 4) PEDIDOS EM CARTEIRA
 # =========================
 st.subheader("4) Pedidos firmes — Em carteira")
+
 # inicia/recupera
 if "mps_firm_orders" in st.session_state:
     current_orders = st.session_state["mps_firm_orders"].copy()
     # sincroniza com labels atuais
-    if list(current_orders["ds"]) != labels:
-        current_orders = pd.DataFrame({"ds": labels, "y": [0]*len(labels)})
+    # current_orders['ds'] pode ser Timestamp; força string para comparar com labels_str
+    cur_labels_str = [str(x) for x in current_orders["ds"].tolist()]
+    if cur_labels_str != labels_str:
+        current_orders = pd.DataFrame({"ds": labels_raw, "y": [0]*len(labels_raw)})
 else:
-    current_orders = pd.DataFrame({"ds": labels, "y": [0]*len(labels)})
+    current_orders = pd.DataFrame({"ds": labels_raw, "y": [0]*len(labels_raw)})
 
-# editor em linha única
-orders_row_df = pd.DataFrame([current_orders["y"].tolist()], index=["Em carteira"], columns=labels)
+# editor em linha única: colunas são strings
+orders_row_df = pd.DataFrame([current_orders["y"].tolist()], index=["Em carteira"], columns=labels_str)
 orders_row_df = st.data_editor(
     orders_row_df,
     use_container_width=True,
     num_rows="fixed",
-    column_config={lab: st.column_config.NumberColumn(lab, min_value=0, step=1) for lab in labels},
+    column_config={lab: st.column_config.NumberColumn(lab, min_value=0, step=1) for lab in labels_str},
     key="orders_row_inputs_mps",
 )
-# reconstrói df (ds,y)
-orders_df = pd.DataFrame({"ds": labels, "y": orders_row_df.loc["Em carteira"].astype(int).values})
+orders_row_df = orders_row_df.fillna(0)
+
+# reconstrói df (ds original, y)
+values = orders_row_df.loc["Em carteira"].astype(int).reindex(labels_str).tolist()
+orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 
 # =========================
 # 5) CUSTOS (opcional para páginas futuras)
@@ -161,7 +169,7 @@ st.divider()
 if st.button("💾 Salvar inputs do MPS", type="primary"):
     st.session_state["mps_inputs"] = {
         "item_name": item_name,
-        "lot_policy_default": lot_policy_default,
+        "lot_policy_default": "FX" if lot_policy_default == "FX" else "L4L",
         "lot_size_default": int(lot_size_default),
         "initial_inventory_default": int(initial_inventory_default),
         "lead_time_default": int(lead_time_default),
@@ -170,7 +178,7 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
         "z_choice": z_choice,
         "cv_pct": float(cv_pct) if cv_pct is not None else None,
         "sigma_abs": float(sigma_abs) if sigma_abs is not None else None,
-        "frozen_range": tuple(frozen_range),
+        "frozen_range": tuple(frozen_range),  # strings (compatível com UI)
         # custos (para futura consolidação)
         "unit_cost": float(unit_cost),
         "holding_rate": float(holding_rate),
@@ -179,7 +187,6 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
     }
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
-
 
 st.divider()
 st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)", icon="🗓️")

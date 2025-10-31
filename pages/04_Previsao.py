@@ -8,7 +8,7 @@ from __future__ import annotations
 - console de logs FILTRADO (eventos essenciais)
 - barra de progresso proporcional e ACUMULATIVA (base × (bootstrap+1))
 - resultado persiste em session_state
-- botões: salvar previsão → MPS, ir para Inputs (05) e ir para MPS (06)
+- botões: salvar previsão → MPS, link somente para Inputs (05)
 """
 
 import sys, re, inspect, copy, contextlib, io, traceback, time, hashlib, json
@@ -164,7 +164,7 @@ _WHITELIST = [
     r"Realizando testes da série .*log",
     r"Concluídos testes:\s*log",
     r"^•\s*Testes — bootstrap",
-    r"bootstrap\s*\(.*\)\s*—\s*fim",
+    r"bootstrap.*replica\s*=\s*\d+\s*/\s*\d+.*—\s*(início|fim)",
     r"===== CAMPEÃO",
     r"==== PIPELINE FINALIZADO ====",
     r"Linhas totais de experimentos:",
@@ -188,31 +188,24 @@ def _push_log(line: str):
 _original_log = getattr(pipe, "log", print)
 
 # padrões de progresso do log
-_RE_BOOT   = re.compile(r"bootstrap\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)   # i/N
-_RE_GEN    = re.compile(r"progresso\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)    # j/N (rodada base)
+# base: "progresso j/N"
+_RE_GEN    = re.compile(r"progresso\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+# bootstrap: aceita "bootstrap 3/20" e "bootstrap (replica=3/20) — início/fim"
+_RE_BOOT_1 = re.compile(r"bootstrap\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+_RE_BOOT_2 = re.compile(r"bootstrap.*replica\s*=\s*(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 
 # --- Progresso acumulativo corrigido ---
 _state = {
-    "base_done": 0,      # 0..BASE
-    "boot_cur": 0,       # 0..N_BOOTSTRAP
-    "progress_main": 0,  # fração 0..1 da parte principal
-    "progress_boot": 0,  # fração 0..1 do bootstrap
+    "base_frac": 0.0,      # fração 0..1 da parte principal
+    "boot_frac": 0.0,      # fração 0..1 do bootstrap (réplicas)
     "BASE": BASE,
-    "TOTAL": TOTAL,
     "N_BOOTSTRAP": N_BOOTSTRAP,
 }
 
 def _emit_progress():
-    """Calcula o progresso acumulativo total com base em base_done + bootstrap."""
-    BASE = _state["BASE"]
-    N_BOOTSTRAP = _state["N_BOOTSTRAP"]
-    # parte principal: 0..1
-    base_ratio = _state["progress_main"]
-    # parte bootstrap: 0..1
-    boot_ratio = _state["progress_boot"]
-    # peso da parte base é 1/(1+N), e o do bootstrap é N/(1+N)
-    # equivalendo a TOTAL = BASE * (1 + N_BOOTSTRAP)
-    total_ratio = min(1.0, (base_ratio + (boot_ratio * N_BOOTSTRAP)) / (1.0 + N_BOOTSTRAP))
+    """Progresso total = (base + boot*N) / (1+N)."""
+    N = max(0, _state["N_BOOTSTRAP"])
+    total_ratio = min(1.0, (_state["base_frac"] + _state["boot_frac"] * N) / (1.0 + N))
     pct = int(round(100 * total_ratio))
     prog.progress(min(100, max(0, pct)))
     return pct
@@ -222,23 +215,23 @@ def _patched_log(msg: str):
     try:
         _push_log(s)
 
-        # Detecta progresso base: "progresso j/N"
+        # Detecta progresso base
         m = _RE_GEN.search(s)
         if m:
             j, N = int(m.group(1)), max(1, int(m.group(2)))
-            progress_val = j / float(N)
-            if progress_val > _state["progress_main"]:
-                _state["progress_main"] = progress_val
-                _state["base_done"] = int(round(progress_val * _state["BASE"]))
+            frac = j / float(N)
+            if frac > _state["base_frac"]:
+                _state["base_frac"] = frac
 
-        # Detecta progresso do bootstrap: "bootstrap i/N"
-        m2 = _RE_BOOT.search(s)
-        if m2:
-            i, N = int(m2.group(1)), max(1, int(m2.group(2)))
-            progress_val = i / float(N)
-            if progress_val > _state["progress_boot"]:
-                _state["progress_boot"] = progress_val
-                _state["boot_cur"] = i
+        # Detecta progresso bootstrap (dois formatos)
+        m1 = _RE_BOOT_1.search(s)
+        m2 = _RE_BOOT_2.search(s)
+        mm = m1 or m2
+        if mm:
+            i, N = int(mm.group(1)), max(1, int(mm.group(2)))
+            frac = i / float(N)
+            if frac > _state["boot_frac"]:
+                _state["boot_frac"] = frac
 
         pct = _emit_progress()
         prog_text.write(f"{pct}% — {s}" if pct < 100 else "100% — concluído")
@@ -375,7 +368,7 @@ if res is not None:
     st.divider()
     st.subheader("➡️ Próximos passos")
 
-    c_save, c_inputs, c_mps = st.columns([1.3, 1.3, 1.0])
+    c_save, c_inputs = st.columns([1.4, 1.0])
 
     with c_save:
         can_save = forecast_df_std is not None and len(forecast_df_std) > 0
@@ -388,8 +381,5 @@ if res is not None:
     with c_inputs:
         st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para Inputs do MPS", icon="⚙️", use_container_width=True)
 
-    with c_mps:
-        st.page_link("pages/06_MPS.py", label="🗓️ Ir para o MPS", icon="🗓️", use_container_width=True)
-
     if not st.session_state.get("forecast_committed", False):
-        st.info("Clique em **Salvar previsão para o MPS** antes de avançar.", icon="ℹ️")
+        st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")
