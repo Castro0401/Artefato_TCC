@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 """
-04_Previsao.py — Paridade de terminal:
-- NÃO força (des)ativação de Prophet/LSTM; usa exatamente o que o pipeline define.
-- Quando "Modo rápido" = OFF (padrão), NÃO altera nenhuma grade.
-- Progresso acumulativo por rodadas (original, log, bootstrap) e famílias (Croston, SBA, TSB, RF, SARIMAX).
-- Console de logs filtrado.
-- Próximos passos centralizados: [Salvar previsão]  |  [Ir para Inputs do MPS].
+04_Previsao.py — Paridade de terminal + controles LOG/BOOTSTRAP e UX polida:
+- Controles: horizonte, modo rápido, aplicar log (checkbox), bootstrap (checkbox) e réplicas (slider dependente do modo).
+- Modo rápido OFF (padrão): não altera grades; usa o que o pipeline define (inclui Prophet/LSTM se o pipeline tiver).
+- Progresso acumulativo por rodadas (original, log opcional, bootstrap opcional) e famílias (Croston, SBA, TSB, RF, SARIMAX).
+- Console de logs filtrado (essenciais).
+- Gráfico com cores fixas: Real = azul escuro, Previsão = azul claro.
+- “Experimentos” oferece apenas download em CSV (sem plotar a tabela enorme).
+- “Salvar previsão para o MPS” alinhado à esquerda e link para “Inputs do MPS” à direita.
 """
 
-import sys, re, inspect, copy, contextlib, io, traceback, hashlib, json
+import sys, re, copy, contextlib, io, traceback, hashlib, json
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 # ===== import pipeline
 ROOT = Path(__file__).resolve().parent.parent
@@ -93,21 +96,37 @@ def apply_fast_grids(module):
 # ===== form (config)
 with st.form(key="previsao_form"):
     st.sidebar.header("⚙️ Configurações")
+
     HORIZON = st.sidebar.selectbox("Horizonte (meses)", [6,8,12], index=0)
+
     FAST_MODE = st.sidebar.toggle(
         "Modo rápido (grade reduzida)",
         value=False,
         help="Quando desligado (padrão), usa as grades integrais do pipeline."
     )
-    SEASONAL_PERIOD = 12
 
-    # IMPORTANTÍSSIMO: não tocar em Prophet/LSTM; usa o que o pipeline decidir
+    # Controles de LOG/BOOTSTRAP
+    DO_LOG = st.sidebar.checkbox("Aplicar log (testar série log-transformada)", value=True)
+    DO_BOOTSTRAP = st.sidebar.checkbox("Ativar bootstrap (re-amostragem)", value=True)
+
+    # Slider de réplicas dependente do modo
     if FAST_MODE:
+        max_boot = 10
+        default_boot = 10
         apply_fast_grids(pipe)
-        N_BOOTSTRAP = 5
     else:
+        max_boot = 50
+        default_boot = 20
         restore_full_grids(pipe)
-        N_BOOTSTRAP = 20
+
+    if DO_BOOTSTRAP:
+        N_BOOTSTRAP = st.sidebar.slider("Réplicas do bootstrap",
+                                        min_value=1, max_value=max_boot,
+                                        value=default_boot, step=1)
+    else:
+        N_BOOTSTRAP = 0
+
+    SEASONAL_PERIOD = 12  # igual ao terminal
 
     # cálculo só para exibir na UI (não afeta execução)
     def _len(x): 
@@ -121,7 +140,11 @@ with st.form(key="previsao_form"):
     if hasattr(pipe,"SARIMA_GRID"):
         g = pipe.SARIMA_GRID
         base += _len(g.get("p",[]))*_len(g.get("d",[]))*_len(g.get("q",[]))*_len(g.get("P",[]))*_len(g.get("D",[]))*_len(g.get("Q",[]))
-    st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações≈{max(1,base)} | bootstrap={N_BOOTSTRAP}")
+
+    rounds_desc = ["original"]
+    if DO_LOG: rounds_desc.append("log")
+    if DO_BOOTSTRAP: rounds_desc.append(f"bootstrap×{N_BOOTSTRAP}")
+    st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações≈{max(1,base)} | rodadas: {', '.join(rounds_desc)}")
 
     submitted = st.form_submit_button("▶️ Rodar previsão", type="primary", disabled=ss.is_running)
 
@@ -170,7 +193,8 @@ if hasattr(pipe, "SARIMA_GRID"):
     FAMILY_WEIGHT["SARIMAX"] = _len_safe(g.get("p",[]))*_len_safe(g.get("d",[]))*_len_safe(g.get("q",[]))*_len_safe(g.get("P",[]))*_len_safe(g.get("D",[]))*_len_safe(g.get("Q",[]))
 FAMILY_ORDER = [f for f in ["CROSTON","SBA","TSB","RF","SARIMAX"] if FAMILY_WEIGHT[f] > 0]
 ROUND_WEIGHT = sum(FAMILY_WEIGHT[f] for f in FAMILY_ORDER)
-TOTAL_ROUNDS = 1 + 1 + N_BOOTSTRAP
+
+TOTAL_ROUNDS = 1 + (1 if DO_LOG else 0) + (N_BOOTSTRAP if DO_BOOTSTRAP else 0)
 TOTAL_WEIGHT = max(1, ROUND_WEIGHT * TOTAL_ROUNDS)
 _state = {"round_idx": 0, "family_pos": 0, "weight_done": 0}
 _FAM_PAT = {
@@ -191,9 +215,11 @@ def _advance_family(fam: str):
     if w > 0: _state["weight_done"] = min(TOTAL_WEIGHT, _state["weight_done"] + w)
 def _maybe_start_round(line: str):
     if _START_ORIG.search(line): _state["round_idx"] = 0; _state["family_pos"] = 0; return
-    if _START_LOG.search(line):  _state["round_idx"] = 1; _state["family_pos"] = 0; return
-    if _BOOT_ANY.search(line) and _state["round_idx"] < 2:
-        _state["round_idx"] = 2; _state["family_pos"] = 0; return
+    if DO_LOG and _START_LOG.search(line):  _state["round_idx"] = 1; _state["family_pos"] = 0; return
+    if DO_BOOTSTRAP and _BOOT_ANY.search(line) and _state["round_idx"] < (1 + (1 if DO_LOG else 0) + 1):
+        _state["round_idx"] = max(_state["round_idx"], 1 + (1 if DO_LOG else 0))
+        _state["family_pos"] = 0
+        return
 def _patched_log(msg: str):
     s = str(msg).strip()
     try:
@@ -202,8 +228,9 @@ def _patched_log(msg: str):
             if _FAM_PAT[fam].search(s):
                 _advance_family(fam)
                 _state["family_pos"] = (_state["family_pos"] + 1) % max(1, len(FAMILY_ORDER))
-                if _state["family_pos"] == 0 and _state["round_idx"] >= 2:
-                    _state["round_idx"] = min(1 + N_BOOTSTRAP, _state["round_idx"] + 1)
+                # avança rodada quando fechar a ordem completa nas rodadas de bootstrap
+                if _state["family_pos"] == 0 and DO_BOOTSTRAP and _state["round_idx"] >= (1 + (1 if DO_LOG else 0)):
+                    _state["round_idx"] = min((1 + (1 if DO_LOG else 0)) + max(0, N_BOOTSTRAP), _state["round_idx"] + 1)
                 pct = _emit_progress()
                 prog_text.write(f"{pct}% — {s}" if pct < 100 else "100% — concluído")
                 break
@@ -220,7 +247,8 @@ def _cfg_key() -> str:
         except Exception: return 0
     g = {
         "HORIZON": HORIZON, "FAST_MODE": FAST_MODE,
-        "N_BOOTSTRAP": N_BOOTSTRAP, "SEASONAL_PERIOD": 12,
+        "DO_LOG": DO_LOG, "DO_BOOTSTRAP": DO_BOOTSTRAP, "N_BOOTSTRAP": N_BOOTSTRAP,
+        "SEASONAL_PERIOD": 12,
         "CROSTON": _len_or_zero(getattr(pipe,"CROSTON_ALPHAS",[])),
         "SBA": _len_or_zero(getattr(pipe,"SBA_ALPHAS",[])),
         "TSB_A": _len_or_zero(getattr(pipe,"TSB_ALPHA_GRID",[])),
@@ -233,7 +261,7 @@ def _cfg_key() -> str:
     return hashlib.sha1(json.dumps(g, sort_keys=True).encode()).hexdigest()
 cfg_key = _cfg_key()
 
-# ===== execução (paridade total com terminal)
+# ===== execução (paridade total com terminal + flags escolhidas)
 if submitted and not ss.is_running and (ss.last_cfg_key != cfg_key or ss.last_result is None):
     ss.is_running = True
     try:
@@ -244,8 +272,8 @@ if submitted and not ss.is_running and (ss.last_cfg_key != cfg_key or ss.last_re
                 resultados = pipe.run_full_pipeline(
                     data_input=s_monthly,
                     sheet_name=None, date_col=None, value_col=None,
-                    horizon=HORIZON, seasonal_period=12,   # identico ao terminal
-                    do_original=True, do_log=True, do_bootstrap=True,
+                    horizon=HORIZON, seasonal_period=12,
+                    do_original=True, do_log=DO_LOG, do_bootstrap=DO_BOOTSTRAP,
                     n_bootstrap=N_BOOTSTRAP, bootstrap_block=24,
                     save_dir=None,
                 )
@@ -283,7 +311,7 @@ if res is not None:
         "model_params": champ.get("model_params"),
     })
 
-    # gráfico real + previsão
+    # ===== gráfico real (azul escuro) + previsão (azul claro) com Altair
     forecast = None
     for key in ("forecast","forecast_df","yhat","pred","prediction"):
         if key in res.attrs:
@@ -303,10 +331,43 @@ if res is not None:
         forecast_df_std = pd.DataFrame({"ds": f_idx, "y": vals})
 
     st.subheader("📈 Histórico + Previsão")
-    st.line_chart(pd.DataFrame({"Real": s_monthly, "Previsão": forecast_s}).iloc[-max(36, HORIZON+6):], height=280)
+    hist_df = pd.DataFrame({"ds": s_monthly.index, "valor": s_monthly.values, "série": "Real"})
+    prev_df = pd.DataFrame({"ds": forecast_s.index, "valor": forecast_s.values, "série": "Previsão"})
+    plot_long = pd.concat([hist_df, prev_df], ignore_index=True)
+    chart = (
+        alt.Chart(plot_long.reset_index(drop=True))
+        .mark_line()
+        .encode(
+            x=alt.X("ds:T", title="Mês"),
+            y=alt.Y("valor:Q", title="Quantidade"),
+            color=alt.Color(
+                "série:N",
+                scale=alt.Scale(domain=["Real","Previsão"], range=["#1e3a8a", "#60a5fa"]),
+                legend=alt.Legend(title=None, orient="top")
+            ),
+            tooltip=[alt.Tooltip("ds:T", title="Período"),
+                     alt.Tooltip("série:N", title="Série"),
+                     alt.Tooltip("valor:Q", title="Valor", format=",.0f")]
+        )
+        .properties(height=280, width="container")
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
 
-    st.subheader("📋 Experimentos (resumo)")
-    st.dataframe(res.reset_index(drop=True), use_container_width=True)
+    # ===== Experimentos — só download em CSV
+    st.subheader("📦 Experimentos")
+    try:
+        exp_df = res.reset_index(drop=True)
+        csv_bytes = exp_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Baixar todos os experimentos (CSV)",
+            data=csv_bytes,
+            file_name="experimentos_previsao.csv",
+            mime="text/csv",
+            help="Contém todas as combinações testadas com métricas e parâmetros."
+        )
+    except Exception:
+        st.info("Resultados dos experimentos indisponíveis para exportação.")
 
     # próximos passos (layout centralizado)
     st.divider(); st.subheader("➡️ Próximos passos")
