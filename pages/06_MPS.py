@@ -63,34 +63,21 @@ st.info(
     icon="ℹ️",
 )
 
-# Snapshot dos parâmetros aplicados
-# -------- Snapshot dos parâmetros aplicados
+# -------- Snapshot dos parâmetros aplicados --------
 lot_policy = inp.get("lot_policy_default", "FX")
 lot_size = int(inp.get("lot_size_default", 150))
 initial_inventory = int(inp.get("initial_inventory_default", 55))
 lead_time = int(inp.get("lead_time_default", 1))
 
-freeze_on = bool(inp.get("freeze_on", False))             # 👈 novo
-frozen_range = inp.get("frozen_range", None)              # pode ser None
-
-# Sem congelamento se switch off ou range inválido
-no_freeze = (not freeze_on) or (not frozen_range) or (not isinstance(frozen_range, (list, tuple))) or (len(frozen_range) != 2)
-
-# -------- Chamada MPS
-base_params = dict(
-    lot_policy=lot_policy,
-    lot_size=int(lot_size),
-    safety_stock=int(safety_stock_for_core),
-    lead_time=int(lead_time),
-    initial_inventory=int(initial_inventory),
-    scheduled_receipts={},
-    firm_customer_orders=orders_df,
+# chave liga/desliga de congelamento + range (pode ser None)
+freeze_on = bool(inp.get("freeze_on", False))
+frozen_range = inp.get("frozen_range", None)
+no_freeze = (
+    (not freeze_on)
+    or (not frozen_range)
+    or (not isinstance(frozen_range, (list, tuple)))
+    or (len(frozen_range) != 2)
 )
-
-# Só envia frozen_range se congelamento realmente ativado
-if not no_freeze:
-    base_params["frozen_range"] = tuple(frozen_range)
-
 
 # -------- Estoque de segurança (série mensal) a partir dos inputs --------
 z_map = {"90%": 1.282, "95%": 1.645, "97.5%": 1.960, "99%": 2.326}
@@ -110,13 +97,13 @@ if auto_ss and len(labels) > 0:
         ss_const = int(np.ceil(z * sigma_abs * np.sqrt(max(lead_time, 1))))
         ss_series = pd.Series([ss_const] * len(labels), index=labels, name="ss")
 
-# -------- Chamada MPS (segura para versões antigas) --------
-# Fallback: média do SS mensal vira 'safety_stock' tradicional
+# -------- Fallback: SS médio para o core --------
 if auto_ss and ss_series is not None:
     safety_stock_for_core = int(np.ceil(ss_series.mean()))
 else:
     safety_stock_for_core = 0
 
+# -------- Monta base_params (agora que safety_stock_for_core existe) --------
 base_params = dict(
     lot_policy=lot_policy,
     lot_size=int(lot_size),
@@ -125,8 +112,11 @@ base_params = dict(
     initial_inventory=int(initial_inventory),
     scheduled_receipts={},
     firm_customer_orders=orders_df,
-    frozen_range=frozen_range,   # envia o intervalo de congelamento para o core
 )
+
+# Só envia frozen_range se congelamento realmente ativado
+if not no_freeze:
+    base_params["frozen_range"] = tuple(frozen_range)
 
 # Passa a série só se o core declarar esse parâmetro (por segurança)
 accepts_series = "safety_stock_series" in inspect.signature(compute_mps_monthly).parameters
@@ -161,13 +151,12 @@ st.dataframe(display_tbl, use_container_width=True, height=300)
 # Parâmetros aplicados (resumo) — versão compacta e sem truncar
 st.subheader("Parâmetros aplicados")
 
-# Estilos simples para KPIs compactos
 st.markdown("""
 <style>
 .kpi {display:flex; flex-direction:column; gap:2px;}
 .kpi small {color:#6b7280; font-size:0.85rem;}
 .kpi .value {font-size:1.6rem; font-weight:600; line-height:1.1;}
-.kpi .value.sm {font-size:1.2rem;} /* valor menor para a Política */
+.kpi .value.sm {font-size:1.2rem;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -175,7 +164,6 @@ policy_label = "Lote Fixo (FX)" if lot_policy == "FX" else "Lote-a-Lote (L4L)"
 lot_size_display = "Variável" if lot_policy == "L4L" else f"{lot_size}"
 
 c1, c2, c3, c4, c5 = st.columns([1.6, 1, 1, 1, 1])
-
 c1.markdown(f'<div class="kpi"><small>Política</small><div class="value sm">{policy_label}</div></div>', unsafe_allow_html=True)
 c2.markdown(f'<div class="kpi"><small>Tamanho do lote</small><div class="value">{lot_size_display}</div></div>', unsafe_allow_html=True)
 c3.markdown(f'<div class="kpi"><small>Estoque inicial</small><div class="value">{initial_inventory}</div></div>', unsafe_allow_html=True)
@@ -187,7 +175,6 @@ if no_freeze:
     st.caption("Período congelado: **sem congelamento**")
 else:
     st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
-
 
 # -------- Exportação Excel --------
 def to_excel_bytes(
@@ -210,7 +197,6 @@ def to_excel_bytes(
     buf.seek(0)
     return buf.getvalue()
 
-
 # -------- Navegação final --------
 st.download_button(
     "⬇️ Baixar MPS (Excel)",
@@ -221,7 +207,6 @@ st.download_button(
 
 st.divider()
 
-# Navegação final: voltar para Inputs e avançar para Conclusão
 c_back, c_next = st.columns(2)
 with c_back:
     st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")

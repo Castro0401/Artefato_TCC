@@ -19,7 +19,7 @@ st.divider()
 st.subheader("Fluxo deste artefato")
 st.markdown("""
 1. **Enviar série temporal** (Excel com 1 coluna de data e 1 coluna de quantidades).  
-2. Análise a série temporal (decomposição, sazonalidade, tendências, outliers).
+2. **Análise da série temporal** (decomposição, sazonalidade, tendências, outliers).
 3. Gerar **previsão (6/8/12 meses)** com o melhor modelo.  
 4. Construir **MPS** para apoiar o PCP.  
 5. Exibir **dashboards** para auxílio na **tomada de decisões**.
