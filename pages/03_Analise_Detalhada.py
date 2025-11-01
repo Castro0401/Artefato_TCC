@@ -71,7 +71,7 @@ st.caption("Esta página aplica **diagnósticos clássicos** (e versões do seu 
 # -----------------------------------------------------------------------------
 # Painel simples de configuração
 # -----------------------------------------------------------------------------
-c1, c2 = st.columns(2)
+c1, c2 = st.columns(2, gap ="small")
 with c1:
     stl_period = st.number_input("Periodicidade para STL (ex.: 12 para mensal)", min_value=2, max_value=24, value=12, step=1)
 with c2:
@@ -117,7 +117,7 @@ else:
     tipo_demanda = _fallback_classificar(met["ADI"], met["CV2"])
 
 st.subheader("1) ADI e CV² — Tipo de demanda")
-cA, cB, cC = st.columns(3)
+cA, cB, cC = st.columns(3, gap ="small")
 cA.metric("ADI (intervalo médio)", "∞" if np.isinf(met["ADI"]) else f"{met['ADI']:.2f}")
 cB.metric("CV² (positivos)", "n/d" if not pd.notna(met["CV2"]) else f"{met['CV2']:.2f}")
 cC.metric("Classificação", tipo_demanda)
@@ -141,7 +141,7 @@ else:
     het = _fallback_hetero(y)
 
 st.subheader("2) Heterocedasticidade e variância crescente")
-cH1, cH2, cH3 = st.columns(3)
+cH1, cH2, cH3 = st.columns(3, gap ="small")
 cH1.metric("|Δy| ~ nível (corr)", f"{het['corr_level_change']:.2f}" if het["corr_level_change"]==het["corr_level_change"] else "—")
 cH2.metric("Tendência da var. móvel", f"{het['trend_var']:.2e}" if het["trend_var"]==het["trend_var"] else "—")
 cH3.metric("Sinal de heterocedasticidade?", "Sim" if het["hetero_flag"] else "Não")
@@ -158,7 +158,7 @@ except Exception:
 
 has_nonpositive = bool((y <= 0).any())
 st.subheader("3) Assimetria e positividade")
-cS1, cS2 = st.columns(2)
+cS1, cS2 = st.columns(2, gap ="small")
 cS1.metric("Assimetria (skew)", f"{sk:.2f}" if sk==sk else "—")
 cS2.metric("Há valores ≤ 0?", "Sim" if has_nonpositive else "Não")
 st.caption("→ **Skew > 0** e dados **> 0** reforçam uso de **log**; com ≤0 prefira **Box-Cox** (com deslocamento).")
@@ -187,7 +187,7 @@ else:
     stl_res = _fallback_stl_strengths(y, stl_period)
 
 st.subheader("4) Decomposição STL — forças (Hyndman)")
-cF1, cF2 = st.columns(2)
+cF1, cF2 = st.columns(2, gap ="small")
 cF1.metric("Força da tendência", f"{stl_res.get('F_trend', np.nan):.2f}" if stl_res.get('F_trend', np.nan)==stl_res.get('F_trend', np.nan) else "—")
 cF2.metric("Força da sazonalidade", f"{stl_res.get('F_seas', np.nan):.2f}" if stl_res.get('F_seas', np.nan)==stl_res.get('F_seas', np.nan) else "—")
 st.caption("→ **1** = componente forte; **0** = fraca/ausente.")
@@ -213,7 +213,7 @@ else:
     stn = _fallback_stationarity(y)
 
 st.subheader("5) Testes ADF e KPSS (estacionariedade)")
-cT1, cT2 = st.columns(2)
+cT1, cT2 = st.columns(2, gap ="small")
 cT1.metric("ADF p-valor (H0: não estacionária)", f"{stn['adf_p']:.4f}" if stn["adf_p"]==stn["adf_p"] else "—")
 cT2.metric("KPSS p-valor (H1: estacionária)", f"{stn['kpss_p']:.4f}" if stn["kpss_p"]==stn["kpss_p"] else "—")
 st.caption("→ **ADF p<0.05** sugere estacionariedade; **KPSS p<0.05** sugere não estacionariedade.")
@@ -240,7 +240,7 @@ else:
     bc = _fallback_boxcox_lambda(y)
 
 st.subheader("6) Box-Cox — λ (MLE)")
-cL1, cL2 = st.columns(2)
+cL1, cL2 = st.columns(2, gap ="small")
 cL1.metric("λ (MLE)", f"{bc.get('lmbda', np.nan):.2f}" if bc.get('lmbda', np.nan)==bc.get('lmbda', np.nan) else "—")
 cL2.metric("Deslocamento aplicado", f"{bc.get('shift', 0.0):.2g}")
 st.caption("→ **λ≈0** reforça **log(y)**; **λ≈1** sugere manter escala; outros λ indicam **Box-Cox**.")
@@ -255,7 +255,7 @@ try:
 
     yy = y.dropna()
     if yy.size >= 10:
-        cG1, cG2 = st.columns(2)
+        cG1, cG2 = st.columns(2, gap ="small")
 
         with cG1:
             fig1, ax1 = plt.subplots(figsize=(5.2, 3.2))
@@ -333,7 +333,7 @@ else:
 # Navegação
 # -----------------------------------------------------------------------------
 st.divider()
-cL, cR = st.columns(2)
+cL, cR = st.columns(2, gap ="large")
 with cL:
     st.page_link("pages/02_Serie_Temporal.py", label="⬅️ Voltar — Série Temporal", icon="📈")
 with cR:

@@ -64,11 +64,33 @@ st.info(
 )
 
 # Snapshot dos parâmetros aplicados
+# -------- Snapshot dos parâmetros aplicados
 lot_policy = inp.get("lot_policy_default", "FX")
 lot_size = int(inp.get("lot_size_default", 150))
 initial_inventory = int(inp.get("initial_inventory_default", 55))
 lead_time = int(inp.get("lead_time_default", 1))
-frozen_range = inp.get("frozen_range", (labels[0], labels[0])) if labels else ("", "")
+
+freeze_on = bool(inp.get("freeze_on", False))             # 👈 novo
+frozen_range = inp.get("frozen_range", None)              # pode ser None
+
+# Sem congelamento se switch off ou range inválido
+no_freeze = (not freeze_on) or (not frozen_range) or (not isinstance(frozen_range, (list, tuple))) or (len(frozen_range) != 2)
+
+# -------- Chamada MPS
+base_params = dict(
+    lot_policy=lot_policy,
+    lot_size=int(lot_size),
+    safety_stock=int(safety_stock_for_core),
+    lead_time=int(lead_time),
+    initial_inventory=int(initial_inventory),
+    scheduled_receipts={},
+    firm_customer_orders=orders_df,
+)
+
+# Só envia frozen_range se congelamento realmente ativado
+if not no_freeze:
+    base_params["frozen_range"] = tuple(frozen_range)
+
 
 # -------- Estoque de segurança (série mensal) a partir dos inputs --------
 z_map = {"90%": 1.282, "95%": 1.645, "97.5%": 1.960, "99%": 2.326}
@@ -161,7 +183,11 @@ c4.markdown(f'<div class="kpi"><small>Lead time (meses)</small><div class="value
 c5_mark = "Sim" if auto_ss else "Não"
 c5.markdown(f'<div class="kpi"><small>SS automático</small><div class="value">{c5_mark}</div></div>', unsafe_allow_html=True)
 
-st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
+if no_freeze:
+    st.caption("Período congelado: **sem congelamento**")
+else:
+    st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
+
 
 # -------- Exportação Excel --------
 def to_excel_bytes(

@@ -19,9 +19,10 @@ st.divider()
 st.subheader("Fluxo deste artefato")
 st.markdown("""
 1. **Enviar série temporal** (Excel com 1 coluna de data e 1 coluna de quantidades).  
-2. Gerar **previsão (6/8/12 meses)** com o melhor modelo.  
-3. Construir **MPS** e **MRP** interativos para apoiar o PCP.  
-4. Exibir **dashboards** e permitir **exportação**.
+2. Análise a série temporal (decomposição, sazonalidade, tendências, outliers).
+3. Gerar **previsão (6/8/12 meses)** com o melhor modelo.  
+4. Construir **MPS** para apoiar o PCP.  
+5. Exibir **dashboards** para auxílio na **tomada de decisões**.
 """)
 
 st.divider()
@@ -30,7 +31,7 @@ st.subheader("Envio do Excel (data + coluna do produto)")
 file = st.file_uploader(
     "Selecione seu arquivo Excel",
     type=["xlsx", "xls"],
-    help="Uma coluna de datas (ds, data, date, dt, mes...) e outra coluna com as quantidades do produto (o nome da coluna será o nome do item)."
+    help="Uma coluna de datas (ds, data, date, dt, mes...) e outra coluna com as quantidades do produto (o nome da coluna de quantidades será o nome do item)."
 )
 
 # ---- utilidades ----
@@ -161,9 +162,8 @@ if file:
     st.session_state["forecast_committed"] = False
 
     st.info(
-        "Série carregada. No **Passo 2**, escolha o horizonte (6/8/12 meses) e salve a previsão para liberar o **MPS**."
-        f" O item atual é **{product_name}**."
+        "Série carregada. Siga para a próxima página."
     )
     st.page_link("pages/02_Serie_Temporal.py", label="➡️ Seguir para Análise da Série Temporal")
 else:
-    st.info("Envie um Excel com **uma coluna de datas** e **uma coluna de quantidades do produto** (o nome da coluna será usado como **nome do item**).")
+    st.info("Envie um Excel com **uma coluna de datas** e **uma coluna de quantidades do produto** (o nome da coluna de quantidades será usado como **nome do item**).")

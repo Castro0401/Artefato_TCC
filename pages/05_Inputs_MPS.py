@@ -44,7 +44,7 @@ labels_raw: list[pd.Timestamp] = ds_ts.tolist()          # valores "reais"
 labels_str: list[str] = [fmt_mmyy(ts) for ts in ds_ts]    # rótulos para UI
 idx_by_label_str = {s: i for i, s in enumerate(labels_str)}
 
-st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} mês(es)**.")
+st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} meses**.")
 
 # defaults
 defaults = st.session_state.get("mps_inputs", {})
@@ -74,11 +74,16 @@ with c4:
         "Estoque em mão inicial (padrão)", min_value=0, step=5, value=int(get("initial_inventory_default", 55))
     )
 
-c5, c6 = st.columns(2)
-with c5:
-    lead_time_default = st.number_input("Lead time (meses)", min_value=0, value=int(get("lead_time_default", 1)), step=1)
-with c6:
-    st.write("")  # espaçamento
+# Lead time (meses)
+lt1, lt2, lt3, lt4 = st.columns(4, gap="small")
+with lt1:
+    lead_time_default = st.number_input(
+        "Lead time (meses)", min_value=0, value=int(get("lead_time_default", 1)), step=1
+    )
+# as três colunas seguintes ficam vazias para manter o alinhamento
+with lt2: st.write("")
+with lt3: st.write("")
+with lt4: st.write("")
 
 # =========================
 # 2) ESTOQUE DE SEGURANÇA — PARÂMETROS
@@ -105,15 +110,18 @@ with row[2]:
 # =========================
 # 3) CONGELAMENTO DE HORIZONTE (intervalo)
 # =========================
+
 st.subheader("3) Congelamento de horizonte (intervalo)")
 
 start_label_str = labels_str[0]
 
-# tenta reaproveitar “fim” salvo (que pode estar em formato antigo)
-_saved = get("frozen_range", (start_label_str, start_label_str))
-saved_end_str = _saved[1] if isinstance(_saved, tuple) and len(_saved) == 2 else start_label_str
+# novo: chave liga/desliga
+freeze_on_default = bool(defaults.get("freeze_on", False))
+freeze_on = st.checkbox("Ativar congelamento", value=freeze_on_default)
 
-# migração: se salvo antigo não existir em labels_str, tenta converter
+# tenta reaproveitar “fim” salvo (compatível com formato antigo)
+_saved = defaults.get("frozen_range", (start_label_str, start_label_str))
+saved_end_str = _saved[1] if isinstance(_saved, (list, tuple)) and len(_saved) == 2 else start_label_str
 if saved_end_str not in labels_str:
     try:
         ts_try = pd.to_datetime(saved_end_str, errors="coerce")
@@ -121,18 +129,21 @@ if saved_end_str not in labels_str:
             saved_end_str = fmt_mmyy(ts_try.to_period("M").to_timestamp())
     except Exception:
         saved_end_str = start_label_str
-
 if saved_end_str not in labels_str:
     saved_end_str = start_label_str
 
-end_label_str = st.select_slider(
-    f"Selecione o **fim** do período a congelar (início fixo em {start_label_str})",
-    options=labels_str,
-    value=saved_end_str,
-)
+if freeze_on:
+    end_label_str = st.select_slider(
+        f"Selecione o **fim** do período a congelar (início fixo em {start_label_str})",
+        options=labels_str,
+        value=saved_end_str,
+    )
+    frozen_range = (start_label_str, end_label_str)
+    st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
+else:
+    frozen_range = None
+    st.caption("Período congelado: **sem congelamento**")
 
-frozen_range = (start_label_str, end_label_str)
-st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
 
 # =========================
 # 4) PEDIDOS EM CARTEIRA
@@ -182,7 +193,7 @@ with c12:
 # =========================
 # SALVAR
 # =========================
-st.divider()
+
 if st.button("💾 Salvar inputs do MPS", type="primary"):
     st.session_state["mps_inputs"] = {
         "item_name": item_name,
@@ -195,9 +206,8 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
         "z_choice": z_choice,
         "cv_pct": float(cv_pct) if cv_pct is not None else None,
         "sigma_abs": float(sigma_abs) if sigma_abs is not None else None,
-        # guardamos strings bonitas (compatível com a UI)
-        "frozen_range": tuple(frozen_range),
-        # custos
+        "freeze_on": bool(freeze_on),                                 # 👈 novo
+        "frozen_range": tuple(frozen_range) if freeze_on else None,   # 👈 novo
         "unit_cost": float(unit_cost),
         "holding_rate": float(holding_rate),
         "order_cost": float(order_cost),
@@ -206,11 +216,12 @@ if st.button("💾 Salvar inputs do MPS", type="primary"):
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
 
+
 # -------- Navegação --------
 st.divider()
 
 # Linha 1: botões de navegação lado a lado (esquerda = voltar; direita = avançar)
-c_back, c_next = st.columns([1, 1])
+c_back, c_next = st.columns([1, 1], gap="large")
 with c_back:
     st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão", icon="🔮")
 with c_next:
