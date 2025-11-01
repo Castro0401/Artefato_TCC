@@ -11,21 +11,12 @@ st.title("🧪 Análise Detalhada — Diagnósticos essenciais")
 # ---- layout compacto (só nesta página) ----
 st.markdown("""
 <style>
-/* Escopo local: só o que estiver dentro do .compact terá as regras aplicadas */
 .compact h2, .compact h3 { margin-top: .35rem; margin-bottom: .35rem; }
-
-/* Widgets de topo (number_input) – reduz espaço vertical */
 .compact [data-testid="stNumberInput"] { margin-bottom: .35rem; }
-
-/* Métricas – o maior culpado do espaço extra */
 .compact [data-testid="stMetric"] { margin-bottom: .25rem; }
-.compact [data-testid="stMetric"] > div { gap: .15rem; }     /* cola título e valor */
-.compact [data-testid="stMetricValue"] { line-height: 1.05; } /* valor menos “alto” */
-
-/* Captions explicativas – encurtar espaço */
+.compact [data-testid="stMetric"] > div { gap: .15rem; }
+.compact [data-testid="stMetricValue"] { line-height: 1.05; }
 .compact [data-testid="stCaptionContainer"] { margin-top: .15rem; margin-bottom: .5rem; }
-
-/* Colunas – reduz leve padding lateral */
 .compact [data-testid="column"] { padding-right: .5rem !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -34,7 +25,7 @@ st.markdown("""
 st.markdown('<div class="compact">', unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-// Guards: precisa do Upload
+# Guards: precisa do Upload
 # -----------------------------------------------------------------------------
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
@@ -50,12 +41,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:
-    from core import Estatisticas as EST  # ajuste se o módulo tiver outro nome
+    from core import Estatisticas as EST
 except Exception:
     EST = None  # fallbacks locais
 
 # -----------------------------------------------------------------------------
-# Helpers de data e imputação (iguais ao restante do app)
+# Helpers de data e imputação
 # -----------------------------------------------------------------------------
 _PT = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
 _REV_PT = {v:k for k, v in _PT.items()}
@@ -102,7 +93,7 @@ with c2:
     nlags = st.number_input("Lags para ACF/PACF e Ljung–Box", min_value=8, max_value=48, value=24, step=1)
 
 # =============================================================================
-# 1) ADI & CV² — tipo de demanda (usa core/Estatisticas se existir)
+# 1) ADI & CV² — tipo de demanda
 # =============================================================================
 def _fallback_calcular_adi_cv2(y_series: pd.Series) -> dict:
     v = y_series.fillna(0.0).astype(float)
@@ -148,7 +139,7 @@ cC.metric("Classificação", tipo_demanda)
 st.caption("→ **Croston/SBA/TSB** para **Intermittent/Lumpy**; **Regular** tende a funcionar com modelos clássicos; **Erratic** requer cautela.")
 
 # =============================================================================
-# 2) Heterocedasticidade (sinais) — usa core/Estatisticas se existir
+# 2) Heterocedasticidade (sinais)
 # =============================================================================
 def _fallback_hetero(y_series: pd.Series):
     dy = y_series.diff().abs()
@@ -172,7 +163,7 @@ cH3.metric("Sinal de heterocedasticidade?", "Sim" if het["hetero_flag"] else "N�
 st.caption("→ **Sinal positivo** sugere **log** ou **Box-Cox** para estabilizar variância.")
 
 # =============================================================================
-# 3) Assimetria / positividade — fallback simples
+# 3) Assimetria / positividade
 # =============================================================================
 try:
     from scipy.stats import skew
@@ -188,7 +179,7 @@ cS2.metric("Há valores ≤ 0?", "Sim" if has_nonpositive else "Não")
 st.caption("→ **Skew > 0** e dados **> 0** reforçam uso de **log**; com ≤0 prefira **Box-Cox** (com deslocamento).")
 
 # =============================================================================
-# 4) Decomposição STL — Força da tendência e sazonalidade (Hyndman)
+# 4) Decomposição STL — Forças
 # =============================================================================
 def _fallback_stl_strengths(y_series: pd.Series, period: int):
     try:
@@ -217,7 +208,7 @@ cF2.metric("Força da sazonalidade", f"{stl_res.get('F_seas', np.nan):.2f}" if s
 st.caption("→ **1** = componente forte; **0** = fraca/ausente.")
 
 # =============================================================================
-# 5) ADF e KPSS — Estacionariedade (usa core/Estatisticas se existir)
+# 5) ADF e KPSS — Estacionariedade
 # =============================================================================
 def _fallback_stationarity(y_series: pd.Series):
     out = dict(adf_p=np.nan, kpss_p=np.nan, _err=None)
@@ -243,7 +234,7 @@ cT2.metric("KPSS p-valor (H1: estacionária)", f"{stn['kpss_p']:.4f}" if stn["kp
 st.caption("→ **ADF p<0.05** sugere estacionariedade; **KPSS p<0.05** sugere não estacionariedade.")
 
 # =============================================================================
-# 6) Box-Cox λ (MLE) — (usa core/Estatisticas se existir)
+# 6) Box-Cox λ (MLE)
 # =============================================================================
 def _fallback_boxcox_lambda(y_series: pd.Series):
     try:
@@ -270,7 +261,7 @@ cL2.metric("Deslocamento aplicado", f"{bc.get('shift', 0.0):.2g}")
 st.caption("→ **λ≈0** reforça **log(y)**; **λ≈1** sugere manter escala; outros λ indicam **Box-Cox**.")
 
 # =============================================================================
-# 7) FAC (ACF) e FACP (PACF) — gráficos
+# 7) FAC (ACF) e FACP (PACF)
 # =============================================================================
 st.subheader("7) Dependência serial — FAC (ACF) e FACP (PACF)")
 try:
@@ -308,7 +299,6 @@ except Exception as e:
 st.subheader("Recomendações (automáticas)")
 recs = []
 
-# tipo de demanda
 if tipo_demanda in {"Intermittent", "Lumpy"}:
     recs.append("Aplicar **Croston/SBA/TSB** (demanda intermitente).")
 elif tipo_demanda == "Erratic":
@@ -316,28 +306,23 @@ elif tipo_demanda == "Erratic":
 else:
     recs.append("Demanda **regular**: modelos clássicos (com/sem sazonalidade) tendem a funcionar.")
 
-# hetero
 if het["hetero_flag"]:
     recs.append("Sinais de **heterocedasticidade** → considerar **log** ou **Box-Cox**.")
 
-# assimetria / positividade
 if not has_nonpositive and (sk==sk and sk>0.5):
     recs.append("Distribuição **positiva** e **assimétrica** → **log(y)** é apropriado.")
 elif has_nonpositive:
     recs.append("Há valores **≤ 0** → usar **Box-Cox** com deslocamento.")
 
-# forças STL
 Ft, Fs = stl_res.get("F_trend", np.nan), stl_res.get("F_seas", np.nan)
 if Ft==Ft and Ft < 0.2: recs.append("**Tendência fraca** (STL) → evitar modelos com tendência rígida.")
 if Fs==Fs and Fs < 0.2: recs.append("**Sazonalidade fraca** (STL) → considerar modelos **sem sazonalidade**.")
 
-# estacionariedade
 adf_p, kpss_p = stn.get("adf_p", np.nan), stn.get("kpss_p", np.nan)
 if adf_p==adf_p and kpss_p==kpss_p:
     if adf_p >= 0.05 or kpss_p < 0.05:
         recs.append("Evidências de **não estacionariedade** → considerar **diferenciação (Δ)** antes de ARIMA.")
 
-# Box-Cox
 lam = bc.get("lmbda", np.nan)
 if lam==lam:
     if abs(lam) < 0.15:
