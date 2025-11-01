@@ -34,32 +34,53 @@ except Exception:
 # -----------------------------------------------------------------------------
 st.markdown("""
 <style>
-.compact h2, .compact h3 { margin-top:.35rem; margin-bottom:.35rem; }
+/* 1) Tira gordura das seções/títulos */
+h2, h3 { 
+  margin-top: .35rem !important; 
+  margin-bottom: .35rem !important; 
+}
 
-/* KPI compacto (texto + valor bem colados) */
+/* 2) KPI compacto: sem negrito e com gap mínimo */
 .metric-kpi{
   display:flex; flex-direction:column;
-  gap:.10rem; margin:.10rem 0 .35rem 0;
+  gap:.08rem;                /* rótulo x valor bem juntinhos */
+  margin:.10rem 0 .20rem 0;  /* encurta margem vertical do bloco */
 }
 .metric-kpi .lbl{
-  font-size:.95rem; color:var(--secondary-text,#6b7280);
-  margin:0; line-height:1.05;
+  font-size:.95rem; 
+  color:var(--secondary-text,#6b7280);
+  line-height:1.05; 
+  font-weight:400;
+  margin:0;
 }
 .metric-kpi .val{
-  font-size:2.0rem; font-weight:700;
-  margin:0; line-height:1.02;
+  font-size:1.9rem; 
+  font-weight:400;          /* <<< sem negrito */
+  line-height:1.02; 
+  margin:0;
 }
+
+/* 3) Encurta a margem que o Streamlit coloca ao redor de cada elemento
+      SOMENTE quando aquele wrapper contém um .metric-kpi */
+div.element-container:has(.metric-kpi){
+  margin-bottom:.25rem !important;   /* antes é ~1rem */
+}
+
+/* 4) Encurta captions globais (usa em várias seções) */
+div[data-testid="stCaptionContainer"]{
+  margin-top:.20rem !important;
+  margin-bottom:.35rem !important;
+}
+
+/* 5) Parágrafos padrão também mais colados */
+.stMarkdown p { 
+  margin: .15rem 0 !important; 
+}
+
+/* (opcional) dá uma encostada extra nas colunas lado a lado */
+.css-ocqkz7, .css-1r6slb0 { gap: .5rem !important; }  /* seletor de columns (varia por versão) */
 </style>
 """, unsafe_allow_html=True)
-
-def kpi(container, label: str, value: str) -> None:
-    container.markdown(
-        f'''<div class="metric-kpi">
-               <div class="lbl">{label}</div>
-               <div class="val">{value}</div>
-           </div>''',
-        unsafe_allow_html=True
-    )
 
 # -----------------------------------------------------------------------------
 # Helpers de data e imputação
