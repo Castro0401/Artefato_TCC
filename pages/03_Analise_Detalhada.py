@@ -8,24 +8,8 @@ import streamlit as st
 
 st.title("🧪 Análise Detalhada — Diagnósticos essenciais")
 
-# ---- layout compacto (só nesta página) ----
-st.markdown("""
-<style>
-.compact h2, .compact h3 { margin-top: .35rem; margin-bottom: .35rem; }
-.compact [data-testid="stNumberInput"] { margin-bottom: .35rem; }
-.compact [data-testid="stMetric"] { margin-bottom: .25rem; }
-.compact [data-testid="stMetric"] > div { gap: .15rem; }
-.compact [data-testid="stMetricValue"] { line-height: 1.05; }
-.compact [data-testid="stCaptionContainer"] { margin-top: .15rem; margin-bottom: .5rem; }
-.compact [data-testid="column"] { padding-right: .5rem !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# abre um contêiner com a classe 'compact' para escopar o CSS
-st.markdown('<div class="compact">', unsafe_allow_html=True)
-
 # -----------------------------------------------------------------------------
-# Guards: precisa do Upload
+# Guards
 # -----------------------------------------------------------------------------
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
@@ -33,7 +17,7 @@ if "ts_df_norm" not in st.session_state:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# Importa utilitários do módulo auxiliar (core/Estatisticas.py) se disponível
+# Imports auxiliares
 # -----------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 import sys
@@ -43,14 +27,44 @@ if str(ROOT) not in sys.path:
 try:
     from core import Estatisticas as EST
 except Exception:
-    EST = None  # fallbacks locais
+    EST = None
+
+# -----------------------------------------------------------------------------
+# CSS global + KPI compacto
+# -----------------------------------------------------------------------------
+st.markdown("""
+<style>
+.compact h2, .compact h3 { margin-top:.35rem; margin-bottom:.35rem; }
+
+/* KPI compacto (texto + valor bem colados) */
+.metric-kpi{
+  display:flex; flex-direction:column;
+  gap:.10rem; margin:.10rem 0 .35rem 0;
+}
+.metric-kpi .lbl{
+  font-size:.95rem; color:var(--secondary-text,#6b7280);
+  margin:0; line-height:1.05;
+}
+.metric-kpi .val{
+  font-size:2.0rem; font-weight:700;
+  margin:0; line-height:1.02;
+}
+</style>
+""", unsafe_allow_html=True)
+
+def kpi(container, label: str, value: str) -> None:
+    container.markdown(
+        f'''<div class="metric-kpi">
+               <div class="lbl">{label}</div>
+               <div class="val">{value}</div>
+           </div>''',
+        unsafe_allow_html=True
+    )
 
 # -----------------------------------------------------------------------------
 # Helpers de data e imputação
 # -----------------------------------------------------------------------------
 _PT = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
-_REV_PT = {v:k for k, v in _PT.items()}
-
 def to_period(lbl: str) -> pd.Period:
     mon = lbl[:3].title()
     yy = 2000 + int(lbl[-2:])
@@ -68,7 +82,7 @@ def fill_missing_neighbors_with_linear_fallback(y_series: pd.Series) -> pd.Serie
     return y_out
 
 # -----------------------------------------------------------------------------
-# Série base (mensal contínua)
+# Série contínua
 # -----------------------------------------------------------------------------
 df_up = st.session_state["ts_df_norm"].copy()  # ['ds','y'] com labels 'Set/25'
 df_up["p"] = df_up["ds"].apply(to_period)
@@ -80,11 +94,13 @@ df_full["ts"] = df_full["p"].dt.to_timestamp()
 y_raw = df_full["y"].astype(float)
 y = fill_missing_neighbors_with_linear_fallback(y_raw)
 
-st.caption("Esta página aplica **diagnósticos clássicos** (e versões do seu módulo auxiliar) para orientar transformações, "
-           "modelo e políticas de estoque/demanda intermitente.")
+st.caption(
+    "Esta página aplica **diagnósticos clássicos** (e versões do seu módulo auxiliar) "
+    "para orientar transformações, modelo e políticas de estoque/demanda intermitente."
+)
 
 # -----------------------------------------------------------------------------
-# Painel simples de configuração
+# Configurações
 # -----------------------------------------------------------------------------
 c1, c2 = st.columns(2, gap="small")
 with c1:
@@ -114,8 +130,7 @@ def _fallback_calcular_adi_cv2(y_series: pd.Series) -> dict:
 
 def _fallback_classificar(adi: float, cv2: float) -> str:
     LIM_ADI, LIM_CV2 = 1.32, 0.49
-    if np.isinf(adi):
-        return "Sem Demanda"
+    if np.isinf(adi): return "Sem Demanda"
     if (adi < LIM_ADI) and (cv2 < LIM_CV2): return "Regular"
     if (adi >= LIM_ADI) and (cv2 < LIM_CV2): return "Intermittent"
     if (adi < LIM_ADI) and (cv2 >= LIM_CV2): return "Erratic"
@@ -133,13 +148,13 @@ else:
 
 st.subheader("1) ADI e CV² — Tipo de demanda")
 cA, cB, cC = st.columns(3, gap="small")
-cA.metric("ADI (intervalo médio)", "∞" if np.isinf(met["ADI"]) else f"{met['ADI']:.2f}")
-cB.metric("CV² (positivos)", "n/d" if not pd.notna(met["CV2"]) else f"{met['CV2']:.2f}")
-cC.metric("Classificação", tipo_demanda)
+kpi(cA, "ADI (intervalo médio)", "∞" if np.isinf(met["ADI"]) else f"{met['ADI']:.2f}")
+kpi(cB, "CV² (positivos)", "n/d" if not pd.notna(met["CV2"]) else f"{met['CV2']:.2f}")
+kpi(cC, "Classificação", tipo_demanda)
 st.caption("→ **Croston/SBA/TSB** para **Intermittent/Lumpy**; **Regular** tende a funcionar com modelos clássicos; **Erratic** requer cautela.")
 
 # =============================================================================
-# 2) Heterocedasticidade (sinais)
+# 2) Heterocedasticidade
 # =============================================================================
 def _fallback_hetero(y_series: pd.Series):
     dy = y_series.diff().abs()
@@ -157,25 +172,25 @@ else:
 
 st.subheader("2) Heterocedasticidade e variância crescente")
 cH1, cH2, cH3 = st.columns(3, gap="small")
-cH1.metric("|Δy| ~ nível (corr)", f"{het['corr_level_change']:.2f}" if het["corr_level_change"]==het["corr_level_change"] else "—")
-cH2.metric("Tendência da var. móvel", f"{het['trend_var']:.2e}" if het["trend_var"]==het["trend_var"] else "—")
-cH3.metric("Sinal de heterocedasticidade?", "Sim" if het["hetero_flag"] else "Não")
+kpi(cH1, "|Δy| ~ nível (corr)", "—" if not (het["corr_level_change"]==het["corr_level_change"]) else f"{het['corr_level_change']:.2f}")
+kpi(cH2, "Tendência da var. móvel", "—" if not (het["trend_var"]==het["trend_var"]) else f"{het['trend_var']:.2e}")
+kpi(cH3, "Sinal de heterocedasticidade?", "Sim" if het["hetero_flag"] else "Não")
 st.caption("→ **Sinal positivo** sugere **log** ou **Box-Cox** para estabilizar variância.")
 
 # =============================================================================
-# 3) Assimetria / positividade
+# 3) Assimetria e positividade
 # =============================================================================
 try:
     from scipy.stats import skew
     sk = float(skew(y.dropna().values)) if y.dropna().size > 2 else np.nan
 except Exception:
     sk = float(pd.Series(y.dropna()).skew()) if y.dropna().size > 2 else np.nan
-
 has_nonpositive = bool((y <= 0).any())
+
 st.subheader("3) Assimetria e positividade")
 cS1, cS2 = st.columns(2, gap="small")
-cS1.metric("Assimetria (skew)", f"{sk:.2f}" if sk==sk else "—")
-cS2.metric("Há valores ≤ 0?", "Sim" if has_nonpositive else "Não")
+kpi(cS1, "Assimetria (skew)", "—" if not (sk==sk) else f"{sk:.2f}")
+kpi(cS2, "Há valores ≤ 0?", "Sim" if has_nonpositive else "Não")
 st.caption("→ **Skew > 0** e dados **> 0** reforçam uso de **log**; com ≤0 prefira **Box-Cox** (com deslocamento).")
 
 # =============================================================================
@@ -203,8 +218,9 @@ else:
 
 st.subheader("4) Decomposição STL — forças (Hyndman)")
 cF1, cF2 = st.columns(2, gap="small")
-cF1.metric("Força da tendência", f"{stl_res.get('F_trend', np.nan):.2f}" if stl_res.get('F_trend', np.nan)==stl_res.get('F_trend', np.nan) else "—")
-cF2.metric("Força da sazonalidade", f"{stl_res.get('F_seas', np.nan):.2f}" if stl_res.get('F_seas', np.nan)==stl_res.get('F_seas', np.nan) else "—")
+Ft, Fs = stl_res.get("F_trend", np.nan), stl_res.get("F_seas", np.nan)
+kpi(cF1, "Força da tendência", "—" if not (Ft==Ft) else f"{Ft:.2f}")
+kpi(cF2, "Força da sazonalidade", "—" if not (Fs==Fs) else f"{Fs:.2f}")
 st.caption("→ **1** = componente forte; **0** = fraca/ausente.")
 
 # =============================================================================
@@ -229,12 +245,12 @@ else:
 
 st.subheader("5) Testes ADF e KPSS (estacionariedade)")
 cT1, cT2 = st.columns(2, gap="small")
-cT1.metric("ADF p-valor (H0: não estacionária)", f"{stn['adf_p']:.4f}" if stn["adf_p"]==stn["adf_p"] else "—")
-cT2.metric("KPSS p-valor (H1: estacionária)", f"{stn['kpss_p']:.4f}" if stn["kpss_p"]==stn["kpss_p"] else "—")
+kpi(cT1, "ADF p-valor (H0: não estacionária)", "—" if not (stn['adf_p']==stn['adf_p']) else f"{stn['adf_p']:.4f}")
+kpi(cT2, "KPSS p-valor (H1: estacionária)", "—" if not (stn['kpss_p']==stn['kpss_p']) else f"{stn['kpss_p']:.4f}")
 st.caption("→ **ADF p<0.05** sugere estacionariedade; **KPSS p<0.05** sugere não estacionariedade.")
 
 # =============================================================================
-# 6) Box-Cox λ (MLE)
+# 6) Box-Cox — λ (MLE)
 # =============================================================================
 def _fallback_boxcox_lambda(y_series: pd.Series):
     try:
@@ -256,12 +272,12 @@ else:
 
 st.subheader("6) Box-Cox — λ (MLE)")
 cL1, cL2 = st.columns(2, gap="small")
-cL1.metric("λ (MLE)", f"{bc.get('lmbda', np.nan):.2f}" if bc.get('lmbda', np.nan)==bc.get('lmbda', np.nan) else "—")
-cL2.metric("Deslocamento aplicado", f"{bc.get('shift', 0.0):.2g}")
+kpi(cL1, "λ (MLE)", "—" if not (bc.get('lmbda', np.nan)==bc.get('lmbda', np.nan)) else f"{bc.get('lmbda'):.2f}")
+kpi(cL2, "Deslocamento aplicado", f"{bc.get('shift', 0.0):.2g}")
 st.caption("→ **λ≈0** reforça **log(y)**; **λ≈1** sugere manter escala; outros λ indicam **Box-Cox**.")
 
 # =============================================================================
-# 7) FAC (ACF) e FACP (PACF)
+# 7) FAC (ACF) e FACP (PACF) — gráficos
 # =============================================================================
 st.subheader("7) Dependência serial — FAC (ACF) e FACP (PACF)")
 try:
@@ -294,11 +310,10 @@ except Exception as e:
     st.info(f"Não foi possível gerar ACF/PACF: {e}")
 
 # =============================================================================
-# 8) Recomendações resumidas
+# 8) Recomendações
 # =============================================================================
 st.subheader("Recomendações (automáticas)")
 recs = []
-
 if tipo_demanda in {"Intermittent", "Lumpy"}:
     recs.append("Aplicar **Croston/SBA/TSB** (demanda intermitente).")
 elif tipo_demanda == "Erratic":
@@ -308,7 +323,6 @@ else:
 
 if het["hetero_flag"]:
     recs.append("Sinais de **heterocedasticidade** → considerar **log** ou **Box-Cox**.")
-
 if not has_nonpositive and (sk==sk and sk>0.5):
     recs.append("Distribuição **positiva** e **assimétrica** → **log(y)** é apropriado.")
 elif has_nonpositive:
@@ -336,9 +350,6 @@ if recs:
     st.markdown("\n".join(f"- {r}" for r in recs))
 else:
     st.markdown("- Sem recomendações automáticas (série possivelmente muito curta).")
-
-# fecha o contêiner compacto
-st.markdown('</div>', unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # Navegação
