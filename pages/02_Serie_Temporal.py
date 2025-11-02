@@ -242,7 +242,6 @@ col_flag, col_btn = st.columns([2, 1])
 with col_flag:
     want_robust = st.checkbox("Quero ver a **Análise detalhada (técnica)** antes da previsão", value=False)
 with col_btn:
-    st.divider()
     go_next = st.button("Continuar", type="primary")
 
 ROBUST_PAGE   = "pages/03_Analise_Detalhada.py"
