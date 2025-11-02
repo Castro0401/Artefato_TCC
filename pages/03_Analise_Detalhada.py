@@ -110,7 +110,7 @@ c1, c2 = st.columns(2, gap="small")
 with c1:
     stl_period = st.number_input("Periodicidade para STL (ex.: 12 para mensal)", 2, 24, 12, 1)
 with c2:
-    nlags = st.number_input("Lags para ACF/PACF e Ljung–Box", 8, 48, 24, 1)
+    nlags = st.number_input("Lags para ACF/PACF", 8, 48, 24, 1)
 
 # =============================================================================
 # 1) ADI & CV²

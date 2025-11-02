@@ -234,7 +234,7 @@ st.divider()
 st.markdown(
     "### Próximo passo\n"
     "Você pode seguir direto para a **Previsão** ou, se preferir, abrir uma **Análise detalhada** "
-    "(teste de estacionariedade ADF/KPSS, autocorrelação Ljung–Box, ACF/PACF, etc.). "
+    "(teste de estacionariedade ADF/KPSS, heterocedasticidade , ACF/PACF, etc.). "
     "**Atenção:** esta análise é mais técnica e voltada a quem tem familiaridade com métodos de séries temporais."
 )
 
