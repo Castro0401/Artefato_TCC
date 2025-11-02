@@ -9,7 +9,7 @@ import streamlit as st
 # -----------------------------
 # Título e abas
 # -----------------------------
-st.title("✅ 07 — Conclusão (Painel de Decisão)")
+st.title("✅ Conclusão (Painel de Decisão)")
 
 tabs = st.tabs(["📊 Acurácia", "🏭 MPS & KPIs", "💡 Recomendações"])
 
@@ -230,6 +230,6 @@ with tabs[2]:
     st.divider()
     cL, cR = st.columns(2)
     with cL:
-        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="🧰")
+        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS")
     with cR:
-        st.page_link("pages/06_MPS.py", label="🗓️ MPS", icon="🗓️")
+        st.page_link("pages/06_MPS.py", label="🗓️ MPS")
