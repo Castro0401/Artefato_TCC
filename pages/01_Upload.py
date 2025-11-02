@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-st.title("📤 Passo 1: Upload da Série temporal do produto a ser analisado")
+st.title("📤 Upload da Série Temporal")
 
 st.markdown("""
 **Antes de enviar, observe:**

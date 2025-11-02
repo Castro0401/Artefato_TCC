@@ -17,14 +17,14 @@ def home_page():
 
         ### Benefícios  
         - **Apoio tecnológico** para geração de previsões consistentes e embasadas em métodos validados na literatura.  
-        - **Integração automática** entre previsão, planejamento (MPS/MRP) e indicadores.  
+        - **Integração automática** entre previsão, planejamento (MPS) e indicadores.  
         - **Fluxo contínuo e intuitivo:**  🧾 **DADOS → 🤖 PREVER → 🏭 PLANEJAR**.  
 
         ---
 
         ### Principais Outputs  
         - 📈 **Previsão de demanda** para os próximos **6, 8 ou 12 meses**.  
-        - 🗓️ **MPS** (Master Production Schedule) e 🧩 **MRP** interativos.  
+        - 🗓️ **MPS** (Master Production Schedule).  
         - 📊 **Dashboards executivos** para visualização consolidada e apoio à decisão.  
         """)
 
@@ -38,7 +38,7 @@ def home_page():
 
 # --------- Navegação com títulos/ícones custom ---------
 nav = st.navigation([
-    st.Page(home_page,                          title="Início — Previsão & PCP", icon="🧭"),  # <- função
+    st.Page(home_page,                          title="Menu", icon="🧭"),  # <- função
     st.Page("pages/01_Upload.py",               title="Upload",                   icon="📤"),
     st.Page("pages/02_Serie_Temporal.py",       title="Série Temporal",          icon="📈"),
     st.Page("pages/03_Analise_Detalhada.py",    title="Análise Detalhada",       icon="🔍"),
