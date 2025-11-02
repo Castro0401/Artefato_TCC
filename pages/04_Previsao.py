@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import sys, re, copy, contextlib, io, traceback, hashlib, json, time
+import sys, re, copy, contextlib, io, traceback, time
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -98,6 +98,10 @@ with st.form(key="previsao_form"):
     # Controles de LOG/BOOTSTRAP
     DO_LOG = st.sidebar.checkbox("Aplicar log (testar série log-transformada)", value=True)
     DO_BOOTSTRAP = st.sidebar.checkbox("Ativar bootstrap (re-amostragem)", value=True)
+
+    # Grava no session_state para outros pontos da página
+    ss["FAST_MODE"] = bool(FAST_MODE)
+    ss["HORIZON"] = int(HORIZON)
 
     # *** Ordem garantida: restaura grades completas e só depois aplica rápido, se for o caso
     restore_full_grids(pipe)
@@ -219,7 +223,6 @@ def _patched_log(msg: str):
             if _FAM_PAT[fam].search(s):
                 _advance_family(fam)
                 _state["family_pos"] = (_state["family_pos"] + 1) % max(1, len(FAMILY_ORDER))
-                # avança rodada quando fechar a ordem completa nas rodadas de bootstrap
                 if _state["family_pos"] == 0 and DO_BOOTSTRAP and _state["round_idx"] >= (1 + (1 if DO_LOG else 0)):
                     _state["round_idx"] = min((1 + (1 if DO_LOG else 0)) + max(0, N_BOOTSTRAP), _state["round_idx"] + 1)
                 pct = _emit_progress()
@@ -298,18 +301,15 @@ if submitted and not ss.is_running:
         # =========================================================
         ss.last_result = resultados
 
-        # 1) Tabela de EXPERIMENTOS (robusto a formatos diferentes)
+        # Experimentos (opcional para a página 07 e download)
         exp_df = None
-        # a) se o próprio resultado for um DataFrame (padrão do pipeline)
         if isinstance(resultados, pd.DataFrame) and not resultados.empty:
             exp_df = resultados.copy()
-        # b) se vier anexado em attrs
         elif hasattr(resultados, "attrs"):
             for key in ["experiments", "experiments_df", "resultados", "table", "exp"]:
                 val = resultados.attrs.get(key)
                 if isinstance(val, pd.DataFrame) and not val.empty:
                     exp_df = val.copy(); break
-        # c) se vier como dict
         if exp_df is None and isinstance(resultados, dict):
             for key in ["experiments", "experiments_df", "resultados", "table", "exp"]:
                 val = resultados.get(key)
@@ -334,6 +334,7 @@ if submitted and not ss.is_running:
 # ===== render
 res = ss.get("last_result")
 if res is not None:
+    # ----- Campeão
     champ = {}
     if hasattr(res, "attrs"):
         champ = res.attrs.get("champion", {}) or {}
@@ -359,32 +360,37 @@ if res is not None:
         "model_params": champ.get("model_params"),
     })
 
-    # ===== tenta obter a PREVISÃO final em formato padrão (ds,y)
-    forecast_df_std = None
+    # ===== PREVISÃO do pipeline (sem fallback)
     forecast = None
-    # 1) se veio em attrs (padrão recente)
     if hasattr(res, "attrs"):
-        for key in ("forecast","forecast_df","yhat","pred","prediction"):
-            if key in res.attrs:
-                forecast = res.attrs[key]; break
-    # 2) se veio como dict
-    if forecast is None and isinstance(res, dict):
-        for key in ("forecast","forecast_df","yhat","pred","prediction"):
-            if key in res:
-                forecast = res[key]; break
-    # 3) normaliza
-    if isinstance(forecast, pd.DataFrame) and {"ds","yhat"}.issubset(forecast.columns):
-        forecast_df_std = forecast.rename(columns={"yhat":"y"})[["ds","y"]].copy()
-    elif isinstance(forecast, pd.DataFrame) and {"ds","y"}.issubset(forecast.columns):
-        forecast_df_std = forecast[["ds","y"]].copy()
+        forecast = res.attrs.get("forecast_df", None)
+        if forecast is None:
+            # se o pipeline reportou erro, exibir claramente
+            f_err = res.attrs.get("forecast_error")
+            if f_err:
+                st.error(f"Pipeline não conseguiu gerar previsão do campeão: {f_err}")
+            else:
+                st.error("Pipeline não retornou 'forecast_df'.")
+    elif isinstance(res, dict):
+        forecast = res.get("forecast_df", None)
+
+    if forecast is None:
+        st.stop()
+
+    # Normaliza para ['ds','y']
+    if isinstance(forecast, pd.DataFrame):
+        if {"ds","yhat"}.issubset(forecast.columns):
+            forecast_df_std = forecast.rename(columns={"yhat":"y"})[["ds","y"]].copy()
+        elif {"ds","y"}.issubset(forecast.columns):
+            forecast_df_std = forecast[["ds","y"]].copy()
+        else:
+            st.error("Formato inesperado de 'forecast_df'. Esperado colunas ['ds','y'] ou ['ds','yhat'].")
+            st.stop()
     elif isinstance(forecast, pd.Series):
         forecast_df_std = pd.DataFrame({"ds": forecast.index, "y": forecast.values})
     else:
-        # fallback: repetição do último ano, só para visualização
-        last = s_monthly[-12:]; reps = int((st.session_state.get("HORIZON", 12)+11)//12)
-        vals = np.tile(last.to_numpy(), reps)[:int(12)]
-        f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=len(vals), freq="MS")
-        forecast_df_std = pd.DataFrame({"ds": f_idx, "y": vals})
+        st.error("Tipo inesperado de 'forecast_df' retornado pelo pipeline.")
+        st.stop()
 
     # ===== Gráfico Real + Previsão (Altair)
     st.subheader("📈 Histórico + Previsão")
@@ -412,15 +418,11 @@ if res is not None:
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # ===== Experimentos — botão de download (se houver)
-    # ===== Experimentos — salvar na sessão e oferecer APENAS o download em CSV
+    # ===== Experimentos — botão de download (sem mostrar tabela)
     st.subheader("📦 Experimentos")
     try:
-        # guarda a tabela completa na sessão p/ a página 07
         exp_df = res.reset_index(drop=True)
         st.session_state["experiments_df"] = exp_df.copy()
-
-        # oferece somente o botão de download (sem mostrar tabela na tela)
         csv_bytes = exp_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             "⬇️ Baixar todos os experimentos (CSV)",
@@ -432,9 +434,8 @@ if res is not None:
     except Exception:
         st.info("Resultados dos experimentos indisponíveis para exportação.")
 
-
     # =============================
-    # 🔗 Próximos passos (à ESQUERDA + botão mais fino)
+    # 🔗 Próximos passos
     # =============================
     st.divider()
     st.subheader("➡️ Próximos passos")
@@ -443,26 +444,23 @@ if res is not None:
     st.markdown("""
     <style>
     div.stButton > button[kind="primary"]{
-        padding: 0.45rem 0.9rem !important;   /* altura menor */
+        padding: 0.45rem 0.9rem !important;
         font-size: 0.95rem !important;
         border-radius: 10px !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    # Linha 1 — Botão Salvar (à esquerda, sem colunas)
+    # Botão Salvar para MPS (usa exatamente o horizonte selecionado)
     can_save = forecast_df_std is not None and len(forecast_df_std) > 0
-    if st.button("💾 Salvar previsão para o MPS", type="primary", disabled=not can_save):
+    if st.button("Salvar previsão para o MPS", type="primary", disabled=not can_save):
         st.session_state["forecast_df"] = forecast_df_std.copy()
-        st.session_state["forecast_h"] = int(HORIZON)
+        st.session_state["forecast_h"] = int(ss.get("HORIZON", HORIZON))
         st.session_state["forecast_committed"] = True
         st.success("Previsão salva para o MPS. Agora você pode ir aos Inputs do MPS.")
 
-    st.markdown("---")  # separador fino
-
-    # Linha 2 — Link para Inputs do MPS (à esquerda, sem colunas)
+    st.markdown("---")
     st.page_link("pages/05_Inputs_MPS.py", label="➡️ Ir para Inputs do MPS")
 
-    # Aviso
     if not st.session_state.get("forecast_committed", False):
         st.info("Clique em **Salvar previsão para o MPS** antes de avançar aos Inputs.", icon="ℹ️")

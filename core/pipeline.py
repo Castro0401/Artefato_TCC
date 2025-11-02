@@ -175,6 +175,7 @@ def _load_series_from_excel(file_path: str, sheet_name=None, date_col=None, valu
     s.index = s.index.to_timestamp(how="start")
     s = s.asfreq("MS").interpolate("linear").bfill().ffill().astype(float)
     s.name = value_col
+    s.index.freq = "MS"  # [NOVO] garante freq para datas futuras
     log(f"Série mensal carregada: {len(s)} pontos, de {s.index.min().date()} a {s.index.max().date()}")
     return s
 
@@ -191,6 +192,7 @@ def ensure_monthly_series(df: pd.DataFrame, date_col: str = "ds", value_col: str
     full_idx = pd.date_range(s.index.min(), s.index.max(), freq="MS")
     s = s.reindex(full_idx).fillna(0.0).astype(float)
     s.name = value_col
+    s.index.freq = "MS"  # [NOVO]
     log(f"Série mensal padronizada: {len(s)} pontos")
     return s
 
@@ -203,8 +205,9 @@ def load_series(data_input: Union[str, pd.DataFrame, pd.Series], sheet_name=None
     """
     if isinstance(data_input, pd.Series):
         s = data_input.copy()
-        if s.index.freqstr != "MS": s = s.asfreq("MS")
+        s = s.asfreq("MS")
         s = s.interpolate("linear").bfill().ffill().astype(float)
+        s.index.freq = "MS"  # [NOVO]
         log(f"Entrada: Series ({len(s)} pontos)")
         return s
     elif isinstance(data_input, pd.DataFrame):
@@ -267,7 +270,7 @@ def make_log_transformers(s: pd.Series, window: int = 6):
 # BOX–COX + STL + BOOTSTRAP (FPP-style)
 # ============================
 @dataclass
-class BoxCoxParams: 
+class BoxCoxParams:
     lam: float; shift: float; note: str  # armazena λ (MLE), shift e observações
 
 @dataclass
@@ -279,7 +282,7 @@ def inverse_boxcox(y_bc: np.ndarray, lam: float, shift: float) -> np.ndarray:
     """Inversão de Box–Cox para λ=0 (log) e λ≠0."""
     return (np.exp(y_bc) - shift) if np.isclose(lam, 0.0) else (np.power(lam*y_bc + 1.0, 1.0/lam) - shift)
 
-def _make_odd(n: int) -> int: 
+def _make_odd(n: int) -> int:
     """STL exige janelas ímpares; ajusta para o próximo ímpar."""
     return int(n) if int(n) % 2 == 1 else int(n) + 1
 
@@ -679,6 +682,207 @@ def select_champion(df: pd.DataFrame) -> pd.Series:
     return best.iloc[0]
 
 # ============================
+# [NOVO] PARSERS E PREVISORES PARA O CAMPEÃO
+# ============================
+def _parse_params_str(s: str) -> Dict[str, float]:
+    """
+    Converte a string de `model_params` em dicionário.
+    Exemplos esperados:
+      - "alpha=0.3"
+      - "alpha=0.3, beta=0.1"
+      - "lags=1..12, n_estimators=500, max_depth=None"
+      - "order=(1,1,1), seasonal=(0,1,1,12), AIC=123.4"
+    """
+    out: Dict[str, float] = {}
+    if not s:
+        return out
+    txt = str(s)
+
+    def _get(name, default=None):
+        import re
+        m = re.search(rf"{name}\s*=\s*([^\s,]+)", txt)
+        return m.group(1) if m else default
+
+    # comuns
+    a = _get("alpha"); b = _get("beta")
+    if a is not None:
+        try: out["alpha"] = float(a)
+        except: pass
+    if b is not None:
+        try: out["beta"] = float(b)
+        except: pass
+
+    # lags
+    l = _get("lags")
+    if l:
+        if ".." in l:
+            try:
+                r1, r2 = l.split("..")
+                out["lags"] = list(range(int(r1), int(r2)+1))
+            except:
+                pass
+        else:
+            try:
+                out["lags"] = [int(l)]
+            except:
+                pass
+    # n_estimators / max_depth
+    ne = _get("n_estimators")
+    if ne: 
+        try: out["n_estimators"] = int(ne)
+        except: pass
+    md = _get("max_depth")
+    if md:
+        out["max_depth"] = None if md.strip().lower()=="none" else int(md)
+
+    # SARIMA
+    import re
+    m_ord = re.search(r"order=\((\-?\d+),(\-?\d+),(\-?\d+)\)", txt)
+    if m_ord:
+        out["order"] = tuple(int(x) for x in m_ord.groups())
+    m_seas = re.search(r"seasonal=\((\-?\d+),(\-?\d+),(\-?\d+),(\-?\d+)\)", txt)
+    if m_seas:
+        out["seasonal_order"] = tuple(int(x) for x in m_seas.groups())
+
+    return out
+
+def _parse_log_params(params_txt: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extrai epsilon e shift de 'preprocess_params' quando preprocess == 'log'.
+    Ex.: 'epsilon=0.0123, shift=0.0, score=...' -> (0.0123, 0.0)
+    """
+    if not params_txt:
+        return None, None
+    import re
+    eps = None; shift = None
+    m1 = re.search(r"epsilon\s*=\s*([\-0-9\.eE]+)", params_txt)
+    m2 = re.search(r"shift\s*=\s*([\-0-9\.eE]+)", params_txt)
+    if m1:
+        try: eps = float(m1.group(1))
+        except: pass
+    if m2:
+        try: shift = float(m2.group(1))
+        except: pass
+    return eps, shift
+
+def _log_fwd_inv_from_params(series: pd.Series, preprocess_params: str):
+    """
+    Reconstrói transformações a partir de epsilon/shift quando possível.
+    Se não conseguir parsear, recorre a make_log_transformers.
+    """
+    eps, sh = _parse_log_params(preprocess_params)
+    if eps is None or sh is None:
+        return make_log_transformers(series)  # recalcula
+    def fwd(x: pd.Series) -> pd.Series:
+        return np.log(x.astype(float) + sh + eps)
+    def inv(arr: np.ndarray) -> np.ndarray:
+        return np.exp(np.asarray(arr, dtype=float)) - sh - eps
+    params_txt = f"epsilon={eps:.6g}, shift={sh:.6g}, score=reused"
+    return fwd, inv, params_txt
+
+def _rf_forecast_recursive(s_model: pd.Series, horizon: int, lags: List[int],
+                           n_estimators: int, max_depth: Optional[int]) -> np.ndarray:
+    """
+    Treina RF no histórico completo e faz previsão recursiva h passos.
+    """
+    df_sup = make_supervised_from_series(s_model, lags)
+    y = df_sup["y"].values
+    X = df_sup.drop(columns=["y"])
+    cols = X.columns
+    model = RandomForestRegressor(n_estimators=n_estimators, random_state=RANDOM_STATE, max_depth=max_depth)
+    model.fit(X.values, y)
+
+    last_vals = list(s_model.values)  # para construir lags
+    preds = []
+    last_date = s_model.index[-1]
+    for step in range(1, horizon+1):
+        future_date = (last_date + pd.offsets.MonthBegin(step))
+        month = future_date.month
+        # constrói a linha de features
+        feat = {}
+        for L in lags:
+            feat[f"lag_{L}"] = last_vals[-L]
+        # dummies (drop_first=True cria month_2..month_12)
+        for m in range(2, 13):
+            feat[f"month_{m}"] = 1 if month == m else 0
+        # garante mesma ordem/colunas
+        x_row = np.array([feat.get(c, 0.0) for c in cols], dtype=float).reshape(1, -1)
+        y_hat = float(model.predict(x_row)[0])
+        preds.append(y_hat)
+        last_vals.append(y_hat)
+    return np.asarray(preds, dtype=float)
+
+def _sarimax_forecast_full(s_model: pd.Series, horizon: int,
+                           order: Tuple[int,int,int],
+                           seasonal_order: Tuple[int,int,int,int],
+                           seasonal_period: int) -> np.ndarray:
+    model = SARIMAX(s_model, order=order, seasonal_order=seasonal_order,
+                    enforce_stationarity=False, enforce_invertibility=False)
+    res = model.fit(disp=False)
+    fc = res.get_forecast(steps=horizon).predicted_mean.values.astype(float)
+    return fc
+
+def _forecast_with_champion(base_series: pd.Series,
+                            champion: dict,
+                            horizon: int,
+                            seasonal_period: int = 12) -> pd.DataFrame:
+    """
+    Reajusta o modelo campeão na série completa (com a mesma pré-transformação)
+    e retorna um DataFrame padrão {'ds','y'} com horizonte futuro.
+    """
+    if not isinstance(base_series.index, pd.DatetimeIndex):
+        raise ValueError("A série base precisa ter DatetimeIndex mensal.")
+
+    preprocess = (champion.get("preprocess") or "original").lower()
+    mp_txt = str(champion.get("model_params", "") or "")
+    mp = _parse_params_str(mp_txt)
+
+    # Pré-transformação (log, se houver)
+    if preprocess.startswith("log"):
+        fwd, inv, _ = _log_fwd_inv_from_params(base_series, str(champion.get("preprocess_params", "")))
+        s_model = pd.Series(fwd(base_series), index=base_series.index)
+        inv_func = inv
+    else:
+        s_model = base_series.copy()
+        inv_func = lambda x: np.asarray(x, dtype=float)
+
+    model = (champion.get("model") or "").upper().strip()
+
+    if model == "CROSTON":
+        alpha = mp.get("alpha", 0.1)
+        _, h_fc = croston_forecast(s_model.values.astype(float), alpha=alpha, h=int(horizon))
+        yhat = inv_func(h_fc)
+    elif model == "SBA":
+        alpha = mp.get("alpha", 0.1)
+        _, h_fc = sba_forecast(s_model.values.astype(float), alpha=alpha, h=int(horizon))
+        yhat = inv_func(h_fc)
+    elif model == "TSB":
+        alpha = mp.get("alpha", 0.1); beta = mp.get("beta", 0.1)
+        _, h_fc = tsb_forecast(s_model.values.astype(float), alpha=alpha, beta=beta, h=int(horizon))
+        yhat = inv_func(h_fc)
+    elif model == "RANDOMFOREST":
+        lags = mp.get("lags", list(range(1, 13)))
+        n_est = mp.get("n_estimators", 300)
+        max_depth = mp.get("max_depth", None)
+        yhat_m = _rf_forecast_recursive(s_model, int(horizon), lags, n_est, max_depth)
+        yhat = inv_func(yhat_m)
+    elif model == "SARIMAX":
+        order = mp.get("order", (0,1,1))
+        seas = mp.get("seasonal_order", (0,1,1, seasonal_period))
+        yhat_m = _sarimax_forecast_full(s_model, int(horizon), order, seas, seasonal_period)
+        yhat = inv_func(yhat_m)
+    elif model == "LSTM":
+        # Por simplicidade: não refaz LSTM aqui. Poderia ser adicionado como necessidade futura.
+        raise ValueError("Refit do LSTM não implementado neste pipeline.")
+    else:
+        raise ValueError(f"Modelo campeão desconhecido: {model!r}")
+
+    # Índice mensal futuro
+    idx = pd.date_range(base_series.index[-1] + pd.offsets.MonthBegin(1),
+                        periods=int(horizon), freq="MS")
+    return pd.DataFrame({"ds": idx, "y": np.asarray(yhat, dtype=float)})
+
+# ============================
 # ORQUESTRADOR GERAL
 # ============================
 def run_full_pipeline(
@@ -786,8 +990,24 @@ def run_full_pipeline(
     for k, v in resumo.items():
         log(f"  • {k}: {v} linhas")
 
-    # Guarda o campeão como atributo do DataFrame para acesso rápido no app
-    df_out.attrs["champion"] = champion.to_dict()
+    # Guarda o campeão e a PREVISÃO (refit + forecast) como atributos do DataFrame para o app
+    champion_dict = champion.to_dict()
+    df_out.attrs["champion"] = champion_dict
+
+    # [NOVO] gera a previsão do campeão, respeitando o horizonte escolhido
+    try:
+        fcst_df = _forecast_with_champion(
+            base_series=base_series,
+            champion=champion_dict,
+            horizon=int(horizon),
+            seasonal_period=int(seasonal_period)
+        )
+        df_out.attrs["forecast_df"] = fcst_df
+        log(f"[OK] Previsão do campeão anexada: {len(fcst_df)} meses (h={int(horizon)})")
+    except Exception as e:
+        df_out.attrs["forecast_error"] = str(e)
+        log(f"[WARN] Não foi possível gerar forecast do campeão: {e}")
+
     return df_out
 
 # ============================
@@ -818,3 +1038,8 @@ if __name__ == "__main__":
         log("RESUMO CAMPEÃO:")
         for k, v in champ.items():
             log(f"  {k}: {v}")
+    # [NOVO] preview da previsão (se houver)
+    fc = resultados.attrs.get("forecast_df")
+    if fc is not None:
+        log("PRIMEIROS MESES DA PREVISÃO DO CAMPEÃO:")
+        print(fc.head().to_string(index=False))
