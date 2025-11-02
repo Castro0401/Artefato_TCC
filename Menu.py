@@ -30,7 +30,7 @@ def home_page():
 
     st.divider()
     st.markdown("### Comece agora")
-    if st.button("➡️ Iniciar — Passo 1 (Upload da Série)", type="primary"):
+    if st.button("Iniciar — Upload da Série", type="primary"):
         try:
             st.switch_page("pages/01_Upload.py")
         except Exception:
