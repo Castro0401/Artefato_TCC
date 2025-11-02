@@ -22,7 +22,7 @@ except ModuleNotFoundError:
     import pipeline as pipe  # fallback
 
 st.set_page_config(page_title="Previsão", page_icon="🔮", layout="wide")
-st.title("🔮 Passo 2 — Previsão")
+st.title("🔮Previsão")
 
 ss = st.session_state
 ss.setdefault("is_running", False)
@@ -399,7 +399,7 @@ if res is not None:
 
     # Linha 1 — Botão Salvar (à esquerda, sem colunas)
     can_save = forecast_df_std is not None and len(forecast_df_std) > 0
-    if st.button("💾 Salvar previsão para o MPS", type="primary", disabled=not can_save):
+    if st.button("Salvar previsão para o MPS", type="primary", disabled=not can_save):
         st.session_state["forecast_df"] = forecast_df_std.copy()
         st.session_state["forecast_h"] = int(HORIZON)
         st.session_state["forecast_committed"] = True
@@ -408,7 +408,7 @@ if res is not None:
     st.markdown("---")  # separador fino
 
     # Linha 2 — Link para Inputs do MPS (à esquerda, sem colunas)
-    st.page_link("pages/05_Inputs_MPS.py", label="➡️ Ir para Inputs do MPS", icon="⚙️")
+    st.page_link("pages/05_Inputs_MPS.py", label="➡️ Ir para Inputs do MPS")
 
     # Aviso
     if not st.session_state.get("forecast_committed", False):

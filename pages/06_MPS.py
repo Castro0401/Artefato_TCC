@@ -13,7 +13,9 @@ CONCLUSAO_PAGE = "pages/07_Dashboard_Conclusao.py"
 
 st.title("🗓️ 06_MPS — Plano Mestre de Produção (mensal)")
 
-# -------- Guardas de etapa --------
+# =========================
+# Guardas de etapa
+# =========================
 if "ts_df_norm" not in st.session_state:
     st.warning("Preciso da série do Passo 1 (Upload) antes de continuar.")
     st.page_link("pages/01_Upload.py", label="Ir para o Passo 1 — Upload")
@@ -34,19 +36,41 @@ if "mps_inputs" not in st.session_state:
     st.page_link("pages/05_Inputs_MPS.py", label="Ir para 05_Inputs_MPS")
     st.stop()
 
-# -------- Core import --------
+# =========================
+# Import do core
+# =========================
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from core.mps import compute_mps_monthly  # usa o core/mps.py atualizado
 
-# -------- Dados / Inputs --------
+# =========================
+# Helpers de formatação de data (PT-BR)
+# =========================
+_PT_ABBR = {
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+}
+def fmt_mes_ano(val) -> str:
+    """Converte timestamps/strings de data para 'Mmm/YY' em PT-BR."""
+    try:
+        ts = pd.to_datetime(val)
+    except Exception:
+        ts = pd.to_datetime(str(val), errors="coerce")
+    if pd.isna(ts):
+        return str(val)
+    return f"{_PT_ABBR[ts.month]}/{ts.year % 100:02d}"
+
+# =========================
+# Dados / Inputs
+# =========================
 fcst = st.session_state["forecast_df"].copy()[["ds", "y"]]
 horizon = int(st.session_state["forecast_h"])
 labels = fcst["ds"].tolist()
+labels_fmt = [fmt_mes_ano(x) for x in labels]  # <<< colunas do grid em Mês/Ano
 inp = st.session_state["mps_inputs"]
 
-# Pedidos firmes (dos inputs). Se não houver ou se labels mudaram, zera.
+# Pedidos firmes (dos inputs). Se não houver ou se labels mudarem, zera.
 orders_df = st.session_state.get(
     "mps_firm_orders", pd.DataFrame({"ds": labels, "y": [0] * len(labels)})
 ).copy()
@@ -55,7 +79,7 @@ if list(orders_df["ds"]) != labels:
 orders_df = orders_df[["ds", "y"]].fillna(0)
 orders_df["y"] = orders_df["y"].astype(int)
 
-# -------- Aviso: parâmetros vêm da página anterior --------
+# Aviso
 st.info(
     "Todos os parâmetros abaixo **vêm da página 05_Inputs_MPS**. "
     "Para ajustar política, tamanhos de lote, estoque em mão, lead time, "
@@ -63,7 +87,9 @@ st.info(
     icon="ℹ️",
 )
 
-# -------- Snapshot dos parâmetros aplicados --------
+# =========================
+# Snapshot de parâmetros
+# =========================
 lot_policy = inp.get("lot_policy_default", "FX")
 lot_size = int(inp.get("lot_size_default", 150))
 initial_inventory = int(inp.get("initial_inventory_default", 55))
@@ -79,7 +105,9 @@ no_freeze = (
     or (len(frozen_range) != 2)
 )
 
-# -------- Estoque de segurança (série mensal) a partir dos inputs --------
+# =========================
+# Estoque de segurança a partir dos inputs
+# =========================
 z_map = {"90%": 1.282, "95%": 1.645, "97.5%": 1.960, "99%": 2.326}
 auto_ss = bool(inp.get("auto_ss", True))
 ss_series: pd.Series | None = None
@@ -97,13 +125,13 @@ if auto_ss and len(labels) > 0:
         ss_const = int(np.ceil(z * sigma_abs * np.sqrt(max(lead_time, 1))))
         ss_series = pd.Series([ss_const] * len(labels), index=labels, name="ss")
 
-# -------- Fallback: SS médio para o core --------
+# Fallback: SS médio para o core
 if auto_ss and ss_series is not None:
     safety_stock_for_core = int(np.ceil(ss_series.mean()))
 else:
     safety_stock_for_core = 0
 
-# -------- Monta base_params (agora que safety_stock_for_core existe) --------
+# Monta base_params
 base_params = dict(
     lot_policy=lot_policy,
     lot_size=int(lot_size),
@@ -113,44 +141,44 @@ base_params = dict(
     scheduled_receipts={},
     firm_customer_orders=orders_df,
 )
-
-# Só envia frozen_range se congelamento realmente ativado
 if not no_freeze:
     base_params["frozen_range"] = tuple(frozen_range)
 
-# Passa a série só se o core declarar esse parâmetro (por segurança)
+# Chamada do core
 accepts_series = "safety_stock_series" in inspect.signature(compute_mps_monthly).parameters
 if auto_ss and ss_series is not None and accepts_series:
-    mps_df = compute_mps_monthly(
-        fcst, **base_params, safety_stock_series=ss_series.astype(int).values
-    )
+    mps_df = compute_mps_monthly(fcst, **base_params, safety_stock_series=ss_series.astype(int).values)
 else:
     mps_df = compute_mps_monthly(fcst, **base_params)
 
-# -------- Visualização --------
-previsto = mps_df["gross_requirements"].astype(int).tolist()
-em_carteira = orders_df["y"].astype(int).tolist()
+# =========================
+# Visualização (grid)
+# =========================
+previsto     = mps_df["gross_requirements"].astype(int).tolist()
+em_carteira  = orders_df["y"].astype(int).tolist()
 estoque_proj = mps_df["projected_on_hand_end"].astype(int).tolist()
-qtd_mps = mps_df["planned_order_receipts"].astype(int).tolist()
-inicio_mps = mps_df["planned_order_releases"].astype(int).tolist()
-atp_cum = (
-    mps_df["atp"].astype(int).cumsum().tolist()
-    if "atp" in mps_df.columns
-    else [0] * len(labels)
-)
+qtd_mps      = mps_df["planned_order_receipts"].astype(int).tolist()
+inicio_mps   = mps_df["planned_order_releases"].astype(int).tolist()
+atp_cum = (mps_df["atp"].astype(int).cumsum().tolist() if "atp" in mps_df.columns else [0] * len(labels))
 
 display_tbl = pd.DataFrame(
     [previsto, em_carteira, estoque_proj, qtd_mps, inicio_mps, atp_cum],
     index=["Previsto", "Em carteira", "Estoque Proj.", "Qtde. MPS", "Início MPS", "ATP(cum)"],
-    columns=labels,
+    columns=labels_fmt,       # <<< usa colunas formatadas 'Mês/Ano'
 )
 
 st.subheader("📅 MPS — Visualização Mensal")
-st.dataframe(display_tbl, use_container_width=True, height=300)
 
-# Parâmetros aplicados (resumo) — versão compacta e sem truncar
+# Altura dinâmica para não aparecer “linha em branco” (preenchimento do grid)
+row_height_px = 38
+header_px = 38
+grid_height = header_px + row_height_px * (len(display_tbl.index))
+st.dataframe(display_tbl, use_container_width=True, height=grid_height)
+
+# =========================
+# Parâmetros aplicados (KPI)
+# =========================
 st.subheader("Parâmetros aplicados")
-
 st.markdown("""
 <style>
 .kpi {display:flex; flex-direction:column; gap:2px;}
@@ -174,9 +202,11 @@ c5.markdown(f'<div class="kpi"><small>SS automático</small><div class="value">{
 if no_freeze:
     st.caption("Período congelado: **sem congelamento**")
 else:
-    st.caption(f"Período congelado: **{frozen_range[0]} → {frozen_range[1]}**")
+    st.caption(f"Período congelado: **{fmt_mes_ano(frozen_range[0])} → {fmt_mes_ano(frozen_range[1])}**")
 
-# -------- Exportação Excel --------
+# =========================
+# Exportação Excel
+# =========================
 def to_excel_bytes(
     df_display: pd.DataFrame,
     fcst: pd.DataFrame,
@@ -186,6 +216,7 @@ def to_excel_bytes(
 ) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        # Exporta com as datas originais (não formatadas) para manter precisão
         df_display.to_excel(writer, sheet_name="MPS", index=True)
         fcst.to_excel(writer, sheet_name="Previsão", index=False)
         orders_df.to_excel(writer, sheet_name="Em_carteira", index=False)
@@ -197,7 +228,6 @@ def to_excel_bytes(
     buf.seek(0)
     return buf.getvalue()
 
-# -------- Navegação final --------
 st.download_button(
     "⬇️ Baixar MPS (Excel)",
     data=to_excel_bytes(display_tbl, fcst, mps_df, orders_df, ss_series),

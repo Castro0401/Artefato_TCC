@@ -194,7 +194,7 @@ with c12:
 # SALVAR
 # =========================
 
-if st.button("💾 Salvar inputs do MPS", type="primary"):
+if st.button("Salvar inputs do MPS", type="primary"):
     st.session_state["mps_inputs"] = {
         "item_name": item_name,
         "lot_policy_default": "FX" if lot_policy_default == "FX" else "L4L",
@@ -223,6 +223,6 @@ st.divider()
 # Linha 1: botões de navegação lado a lado (esquerda = voltar; direita = avançar)
 c_back, c_next = st.columns([1, 1], gap="large")
 with c_back:
-    st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão", icon="🔮")
+    st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão")
 with c_next:
-    st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)", icon="🗓️")
+    st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)")
