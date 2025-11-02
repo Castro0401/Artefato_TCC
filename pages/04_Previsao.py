@@ -22,7 +22,7 @@ except ModuleNotFoundError:
     import pipeline as pipe  # fallback
 
 st.set_page_config(page_title="Previsão", page_icon="🔮", layout="wide")
-st.title("🔮Previsão")
+st.title("🔮 Previsão")
 
 ss = st.session_state
 ss.setdefault("is_running", False)
@@ -39,6 +39,7 @@ if not isinstance(_ts, pd.DataFrame) or not {"ds", "y"}.issubset(_ts.columns):
     st.error("Formato inesperado: esperado DataFrame com colunas ['ds','y'].")
     st.stop()
 
+# ===== helpers de datas
 _PT_MON2NUM = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
 def _label_to_month_start(v) -> pd.Timestamp:
     if isinstance(v, pd.Timestamp): return v
@@ -51,13 +52,14 @@ def _label_to_month_start(v) -> pd.Timestamp:
     except Exception:
         return pd.NaT
 
+# série mensal contínua (MS)
 _idx = _ts["ds"].map(_label_to_month_start)
 s_monthly = (
     pd.Series(_ts.loc[_idx.notna(), "y"].astype(float).to_numpy(), index=_idx[_idx.notna()])
       .sort_index().asfreq("MS").interpolate("linear").bfill().ffill()
 )
 
-# ===== snapshot das grades (para ligar/desligar modo rápido sem “grudar”)
+# ===== snapshot das grades (para ligar/desligar modo rápido)
 _ORIG = {}
 def _snap_if_exists(name: str):
     if hasattr(pipe, name) and name not in _ORIG:
@@ -117,7 +119,7 @@ with st.form(key="previsao_form"):
     else:
         N_BOOTSTRAP = 0
 
-    # Exibição (informativa)
+    # Exibição (informativa) do tamanho da grade
     def _len(x):
         try: return len(x)
         except Exception: return 0
@@ -291,7 +293,37 @@ if submitted and not ss.is_running:
         prog.progress(100); prog_text.write("100% — concluído")
         st.caption(f"⏱️ Tempo de execução: {elapsed:.1f}s")
 
+        # =========================================================
+        # Salva resultado “bruto” (experimentos) e artefatos úteis
+        # =========================================================
         ss.last_result = resultados
+
+        # 1) Tabela de EXPERIMENTOS (robusto a formatos diferentes)
+        exp_df = None
+        # a) se o próprio resultado for um DataFrame (padrão do pipeline)
+        if isinstance(resultados, pd.DataFrame) and not resultados.empty:
+            exp_df = resultados.copy()
+        # b) se vier anexado em attrs
+        elif hasattr(resultados, "attrs"):
+            for key in ["experiments", "experiments_df", "resultados", "table", "exp"]:
+                val = resultados.attrs.get(key)
+                if isinstance(val, pd.DataFrame) and not val.empty:
+                    exp_df = val.copy(); break
+        # c) se vier como dict
+        if exp_df is None and isinstance(resultados, dict):
+            for key in ["experiments", "experiments_df", "resultados", "table", "exp"]:
+                val = resultados.get(key)
+                if isinstance(val, pd.DataFrame) and not val.empty:
+                    exp_df = val.copy(); break
+
+        if isinstance(exp_df, pd.DataFrame) and not exp_df.empty:
+            ss["exp_table"] = exp_df.copy()
+            ss["experiments_df"] = exp_df.copy()
+            ss["experiments_csv"] = exp_df.to_csv(index=False).encode("utf-8")
+            ss["experiments_ready"] = True
+        else:
+            ss["experiments_ready"] = False
+
     except Exception:
         st.error("Falha ao executar a previsão. Traceback abaixo:")
         st.code("\n".join(traceback.format_exc().splitlines()), language="text")
@@ -302,7 +334,12 @@ if submitted and not ss.is_running:
 # ===== render
 res = ss.get("last_result")
 if res is not None:
-    champ = res.attrs.get("champion", {})
+    champ = {}
+    if hasattr(res, "attrs"):
+        champ = res.attrs.get("champion", {}) or {}
+    elif isinstance(res, dict):
+        champ = res.get("champion", {}) or {}
+
     modelo_nome = champ.get("model", "Desconhecido")
     st.subheader(f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if st.session_state.get('FAST_MODE', False) else ""))
 
@@ -322,29 +359,39 @@ if res is not None:
         "model_params": champ.get("model_params"),
     })
 
-    # ===== gráfico real (azul escuro) + previsão (azul claro) com Altair
+    # ===== tenta obter a PREVISÃO final em formato padrão (ds,y)
+    forecast_df_std = None
     forecast = None
-    for key in ("forecast","forecast_df","yhat","pred","prediction"):
-        if key in res.attrs:
-            forecast = res.attrs[key]; break
+    # 1) se veio em attrs (padrão recente)
+    if hasattr(res, "attrs"):
+        for key in ("forecast","forecast_df","yhat","pred","prediction"):
+            if key in res.attrs:
+                forecast = res.attrs[key]; break
+    # 2) se veio como dict
+    if forecast is None and isinstance(res, dict):
+        for key in ("forecast","forecast_df","yhat","pred","prediction"):
+            if key in res:
+                forecast = res[key]; break
+    # 3) normaliza
     if isinstance(forecast, pd.DataFrame) and {"ds","yhat"}.issubset(forecast.columns):
-        f_idx = pd.to_datetime(forecast["ds"])
-        forecast_s = pd.Series(forecast["yhat"].astype(float).to_numpy(), index=f_idx)
         forecast_df_std = forecast.rename(columns={"yhat":"y"})[["ds","y"]].copy()
+    elif isinstance(forecast, pd.DataFrame) and {"ds","y"}.issubset(forecast.columns):
+        forecast_df_std = forecast[["ds","y"]].copy()
     elif isinstance(forecast, pd.Series):
-        forecast_s = forecast.astype(float)
         forecast_df_std = pd.DataFrame({"ds": forecast.index, "y": forecast.values})
     else:
-        last = s_monthly[-12:]; reps = int((HORIZON+11)//12)
-        vals = np.tile(last.to_numpy(), reps)[:HORIZON]
-        f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=HORIZON, freq="MS")
-        forecast_s = pd.Series(vals, index=f_idx)
+        # fallback: repetição do último ano, só para visualização
+        last = s_monthly[-12:]; reps = int((st.session_state.get("HORIZON", 12)+11)//12)
+        vals = np.tile(last.to_numpy(), reps)[:int(12)]
+        f_idx = pd.date_range(s_monthly.index[-1] + pd.offsets.MonthBegin(1), periods=len(vals), freq="MS")
         forecast_df_std = pd.DataFrame({"ds": f_idx, "y": vals})
 
+    # ===== Gráfico Real + Previsão (Altair)
     st.subheader("📈 Histórico + Previsão")
     hist_df = pd.DataFrame({"ds": s_monthly.index, "valor": s_monthly.values, "série": "Real"})
-    prev_df = pd.DataFrame({"ds": forecast_s.index, "valor": forecast_s.values, "série": "Previsão"})
+    prev_df = pd.DataFrame({"ds": pd.to_datetime(forecast_df_std["ds"]), "valor": forecast_df_std["y"].values, "série": "Previsão"})
     plot_long = pd.concat([hist_df, prev_df], ignore_index=True)
+
     chart = (
         alt.Chart(plot_long.reset_index(drop=True))
         .mark_line()
@@ -365,23 +412,24 @@ if res is not None:
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # ===== Experimentos — só download em CSV
+    # ===== Experimentos — botão de download (se houver)
     st.subheader("📦 Experimentos")
-    try:
-        exp_df = res.reset_index(drop=True)
-        csv_bytes = exp_df.to_csv(index=False).encode("utf-8")
+    exp_df = ss.get("exp_table")
+    if isinstance(exp_df, pd.DataFrame) and not exp_df.empty:
+        st.caption("Amostra da tabela (primeiras 100 linhas):")
+        st.dataframe(exp_df.head(100), use_container_width=True)
         st.download_button(
             "⬇️ Baixar todos os experimentos (CSV)",
-            data=csv_bytes,
+            data=ss.get("experiments_csv", exp_df.to_csv(index=False).encode("utf-8")),
             file_name="experimentos_previsao.csv",
             mime="text/csv",
             help="Contém todas as combinações testadas com métricas e parâmetros."
         )
-    except Exception:
+    else:
         st.info("Resultados dos experimentos indisponíveis para exportação.")
 
     # =============================
-    # 🔗 Próximos passos (100% à ESQUERDA + botão mais fino)
+    # 🔗 Próximos passos (à ESQUERDA + botão mais fino)
     # =============================
     st.divider()
     st.subheader("➡️ Próximos passos")
@@ -399,11 +447,11 @@ if res is not None:
 
     # Linha 1 — Botão Salvar (à esquerda, sem colunas)
     can_save = forecast_df_std is not None and len(forecast_df_std) > 0
-    if st.button("Salvar previsão para o MPS", type="primary", disabled=not can_save):
+    if st.button("💾 Salvar previsão para o MPS", type="primary", disabled=not can_save):
         st.session_state["forecast_df"] = forecast_df_std.copy()
         st.session_state["forecast_h"] = int(HORIZON)
         st.session_state["forecast_committed"] = True
-        st.success("Previsão salva para o MPS.")
+        st.success("Previsão salva para o MPS. Agora você pode ir aos Inputs do MPS.")
 
     st.markdown("---")  # separador fino
 

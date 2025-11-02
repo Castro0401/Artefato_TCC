@@ -239,6 +239,6 @@ st.divider()
 
 c_back, c_next = st.columns(2)
 with c_back:
-    st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")
+    st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS")
 with c_next:
-    st.page_link(CONCLUSAO_PAGE, label="➡️ Avançar: Conclusão", icon="✅")
+    st.page_link(CONCLUSAO_PAGE, label="➡️ Avançar: Conclusão")

@@ -225,4 +225,4 @@ c_back, c_next = st.columns([1, 1], gap="large")
 with c_back:
     st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão")
 with c_next:
-    st.page_link("pages/06_MPS.py", label="➡️ Ir para 06_MPS (Plano Mestre de Produção)")
+    st.page_link("pages/06_MPS.py", label="➡️ Ir para MPS (Plano Mestre de Produção)")
