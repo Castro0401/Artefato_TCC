@@ -1,235 +1,271 @@
 # pages/07_Dashboard_Conclusao.py
 from __future__ import annotations
-import io
-from pathlib import Path
-import numpy as np
+
 import pandas as pd
+import numpy as np
 import streamlit as st
+import altair as alt
 
-# -----------------------------
-# Título e abas
-# -----------------------------
-st.title("✅ Conclusão (Painel de Decisão)")
+st.set_page_config(page_title="Conclusão", page_icon="✅", layout="wide")
+st.title("✅ 07 — Conclusão (Painel de Decisão)")
 
-tabs = st.tabs(["📊 Acurácia", "🏭 MPS & KPIs", "💡 Recomendações"])
+# =============================================================================
+# Helpers
+# =============================================================================
+_PT = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
+_REV_PT = {v:k for k, v in _PT.items()}
 
-# Tenta importar Plotly (com fallback)
-try:
-    import plotly.express as px  # type: ignore
-    _plotly_ok = True
-except Exception:
-    _plotly_ok = False
-
-
-# Utilidades
-def _fmt_month(x) -> str:
-    """Formata datas como 'Mes/AA' de forma robusta."""
+def to_month_begin(v) -> pd.Timestamp | pd.NaT:
+    """Converte rótulos 'Set/25' ou strings de data para Timestamp no 1º dia do mês."""
+    if isinstance(v, pd.Timestamp):
+        return pd.Timestamp(year=v.year, month=v.month, day=1)
+    s = str(v)
+    if "/" in s and len(s) <= 6:
+        try:
+            mon, yy = s.split("/")
+            return pd.Timestamp(year=2000 + int(yy), month=_PT[mon], day=1)
+        except Exception:
+            return pd.NaT
     try:
-        dt = pd.to_datetime(x)
-        return dt.strftime("%b/%y").title().replace(".", "")
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.isna(dt):
+            return pd.NaT
+        return pd.Timestamp(year=dt.year, month=dt.month, day=1)
     except Exception:
-        return str(x)
+        return pd.NaT
 
+def fmt_month_label(ts: pd.Timestamp) -> str:
+    """Formata Timestamp -> 'Set/25' (mês/ano 2 dígitos)."""
+    return f"{_REV_PT.get(int(ts.month), '???')}/{str(ts.year)[-2:]}"
 
-def _link_row(left_label: str, page: str, label: str, icon: str):
-    c1, c2 = st.columns([1, 4])
-    with c1:
-        st.markdown(f"**{left_label}**")
-    with c2:
-        st.page_link(page, label=label, icon=icon)
+def _get_exp_df() -> pd.DataFrame | None:
+    """Busca a tabela de experimentos com segurança (sem usar 'or' com DataFrame)."""
+    for key in ("experiments_df", "experiments_table", "pipeline_experiments"):
+        obj = st.session_state.get(key)
+        if isinstance(obj, pd.DataFrame) and len(obj) > 0:
+            # normaliza algumas colunas comuns (se existirem)
+            df = obj.copy()
+            if "sMAPE" in df.columns:
+                # assegura tipo numérico
+                df["sMAPE"] = pd.to_numeric(df["sMAPE"], errors="coerce")
+            if "MAE" in df.columns:
+                df["MAE"] = pd.to_numeric(df["MAE"], errors="coerce")
+            if "RMSE" in df.columns:
+                df["RMSE"] = pd.to_numeric(df["RMSE"], errors="coerce")
+            return df
+    return None
 
+def _get_real_series() -> pd.DataFrame | None:
+    """Traz série real da sessão e padroniza a coluna 'ds' para datetime."""
+    if "ts_df_monthly" in st.session_state and isinstance(st.session_state["ts_df_monthly"], pd.DataFrame):
+        df = st.session_state["ts_df_monthly"].copy()
+        if "ds" in df.columns and "y" in df.columns:
+            df["ds"] = pd.to_datetime(df["ds"], errors="coerce").map(to_month_begin)
+            return df[["ds", "y"]].dropna()
+    if "ts_df_norm" in st.session_state and isinstance(st.session_state["ts_df_norm"], pd.DataFrame):
+        df = st.session_state["ts_df_norm"].copy()
+        if "ds" in df.columns and "y" in df.columns:
+            df["ds"] = df["ds"].map(to_month_begin)
+            return df[["ds", "y"]].dropna()
+    return None
 
-# ============================================================================
-# TAB 1 — ACURÁCIA
-# ============================================================================
-with tabs[0]:
+def _get_forecast_df() -> pd.DataFrame | None:
+    """Traz previsão salva p/ MPS (ds,y) e padroniza 'ds' para datetime."""
+    f = st.session_state.get("forecast_df")
+    if isinstance(f, pd.DataFrame) and {"ds","y"}.issubset(f.columns):
+        out = f.copy()
+        out["ds"] = pd.to_datetime(out["ds"], errors="coerce").map(to_month_begin)
+        return out.dropna()
+    # fallback: tentar extrair do last_result.attrs
+    res = st.session_state.get("last_result")
+    if res is not None and hasattr(res, "attrs"):
+        for key in ("forecast","forecast_df","yhat","pred","prediction"):
+            if key in res.attrs:
+                obj = res.attrs[key]
+                if isinstance(obj, pd.DataFrame) and {"ds","yhat"}.issubset(obj.columns):
+                    out = obj.rename(columns={"yhat":"y"})[["ds","y"]].copy()
+                    out["ds"] = pd.to_datetime(out["ds"], errors="coerce").map(to_month_begin)
+                    return out.dropna()
+                if isinstance(obj, pd.Series):
+                    out = pd.DataFrame({"ds": obj.index, "y": obj.values})
+                    out["ds"] = pd.to_datetime(out["ds"], errors="coerce").map(to_month_begin)
+                    return out.dropna()
+    return None
+
+def kpi_card(label: str, value: str, small: bool = False):
+    st.markdown(
+        f"""
+        <div style="display:flex;flex-direction:column;gap:2px;">
+          <small style="color:#6b7280;font-size:0.85rem;">{label}</small>
+          <div style="font-size:{'1.2rem' if small else '1.6rem'};font-weight:600;line-height:1.1;">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =============================================================================
+# Tabs
+# =============================================================================
+tab_acc, tab_mps, tab_rec = st.tabs(["Acurácia", "MPS & KPIs", "Recomendações"])
+
+# =============================================================================
+# 1) Acurácia
+# =============================================================================
+with tab_acc:
     st.subheader("Desempenho dos modelos de previsão")
 
-    # Dados esperados em memória
-    ts_df = st.session_state.get("ts_df_norm")            # ['ds','y'] historico
-    fcst_df = st.session_state.get("forecast_df")         # ['ds','y'] previsão escolhida
-    exp_df = (st.session_state.get("experiments_df")
-              or st.session_state.get("experiments_table")
-              or st.session_state.get("pipeline_experiments"))  # compatibilidade
-
-    # 1) Tabela de experimentos (se houver)
-    if isinstance(exp_df, pd.DataFrame) and not exp_df.empty:
-        st.caption("Tabela de experimentos (topo). Baixe o CSV para detalhes completos.")
-        # Mostra as N primeiras linhas de forma leve
-        st.dataframe(exp_df.head(50), use_container_width=True, height=260)
-        # Download CSV
-        csv_bytes = exp_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Baixar experimentos (CSV)",
-            data=csv_bytes,
-            file_name="experimentos_previsao.csv",
-            mime="text/csv",
-            help="Baixa todos os experimentos gerados no Passo 2 — Previsão."
-        )
-    else:
+    # Experimentos (vêm da página 04)
+    exp_df = _get_exp_df()
+    if exp_df is None:
         st.info("Sem tabela de experimentos em memória. Gere na página de **Previsão** e volte aqui.")
-        _link_row("Ir:", "pages/04_Previsao.py", "Ir para 04_Previsao", "🔮")
-
-    # 2) Gráfico Real × Previsão
-    st.divider()
-    st.subheader("Real × Previsão (linha do tempo)")
-
-    if ts_df is None or fcst_df is None:
-        st.info("Não foi possível exibir o gráfico: faltam dados de série histórica ou previsão.")
-        _link_row("Ajustar:", "pages/04_Previsao.py", "Ajustar Previsão", "🛠️")
+        st.page_link("pages/04_Previsao.py", label="🧙 Ir para 04_Previsao")
     else:
-        try:
-            hist = ts_df.copy()[["ds", "y"]].rename(columns={"y": "Real"})
-            fut = fcst_df.copy()[["ds", "y"]].rename(columns={"y": "Previsão"})
+        # KPIs resumidos do experimento vencedor (se houver indicação na sessão)
+        champ = {}
+        res = st.session_state.get("last_result")
+        if res is not None and hasattr(res, "attrs"):
+            champ = res.attrs.get("champion", {}) or {}
 
-            # 🔧 Correção do tipo: converte para datetime nas duas bases
-            hist["ds"] = pd.to_datetime(hist["ds"], errors="coerce")
-            fut["ds"] = pd.to_datetime(fut["ds"], errors="coerce")
-
-            # Concatena e ordena
-            both = pd.concat([hist, fut], ignore_index=True).sort_values("ds")
-
-            if _plotly_ok:
-                plot_df = (both
-                           .melt(id_vars="ds", value_vars=["Real", "Previsão"],
-                                 var_name="Série", value_name="Valor")
-                           .dropna(subset=["ds", "Valor"]))
-                fig = px.line(plot_df, x="ds", y="Valor", color="Série",
-                              title="Real × Previsão",
-                              labels={"ds": "Período", "Valor": "Quantidade"})
-                fig.update_layout(legend_title_text="", height=420)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Plotly não está instalado neste ambiente. Instale `plotly` para visualizar o gráfico.")
-        except Exception as e:
-            st.info(f"Não foi possível exibir o gráfico Real × Previsão: {e}")
-
-    st.divider()
-    cL, cR = st.columns(2)
-    with cL:
-        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="🧰")
-    with cR:
-        st.page_link("pages/04_Previsao.py", label="🛠️ Ajustar Previsão", icon="🛠️")
-
-
-# ============================================================================
-# TAB 2 — MPS & KPIs
-# ============================================================================
-with tabs[1]:
-    st.subheader("Produção planejada e disponibilidade (ATP)")
-
-    # O MPS é calculado na página 06; aqui usamos o que estiver na sessão:
-    # - forecast_df (previsão)
-    # - mps_last_df (se a página 06 tiver salvo)
-    # - ou mostramos instruções
-    mps_df = st.session_state.get("mps_last_df") or st.session_state.get("mps_df")
-
-    if not isinstance(mps_df, pd.DataFrame) or mps_df.empty:
-        st.info(
-            "Não encontrei o **MPS** em memória. Gere o MPS na aba **06_MPS** e volte aqui."
-        )
-        _link_row("Ir:", "pages/06_MPS.py", "Ir para 06_MPS (Plano Mestre de Produção)", "🗓️")
-    else:
-        # Exibir um resumo tabular leve
-        cols_show = [c for c in [
-            "ds",
-            "gross_requirements",
-            "projected_on_hand_end",
-            "planned_order_receipts",
-            "planned_order_releases",
-            "atp",
-        ] if c in mps_df.columns]
-
-        df_show = mps_df[cols_show].copy()
-
-        # Formata datas como Mês/Ano para visualização
-        if "ds" in df_show.columns:
-            df_show["Período"] = df_show["ds"].apply(_fmt_month)
-            df_show = df_show.drop(columns=["ds"])
-            # Reordena para deixar período na frente
-            df_show = df_show[["Período"] + [c for c in df_show.columns if c != "Período"]]
-
-        st.dataframe(df_show, use_container_width=True, height=320)
-
-        # Gráfico ATP
-        if _plotly_ok and "atp" in mps_df.columns:
+        c1, c2, c3, c4 = st.columns(4)
+        def _fmt(x):
             try:
-                plot_atp = mps_df.copy()
-                plot_atp["ds"] = pd.to_datetime(plot_atp["ds"], errors="coerce")
-                plot_atp = plot_atp.dropna(subset=["ds"])
-                fig_atp = px.bar(
-                    plot_atp,
-                    x="ds",
-                    y="atp",
-                    title="ATP por período",
-                    labels={"ds": "Período", "atp": "Available-to-Promise"},
+                return f"{float(x):.4g}"
+            except Exception:
+                return "—"
+        c1.kpi = kpi_card("MAE", _fmt(champ.get("MAE")))
+        c2.kpi = kpi_card("sMAPE (%)", _fmt(champ.get("sMAPE")))
+        c3.kpi = kpi_card("RMSE", _fmt(champ.get("RMSE")))
+        c4.kpi = kpi_card("MAPE (%)", _fmt(champ.get("MAPE")))
+
+        # Gráfico Real x Previsão
+        real = _get_real_series()
+        prev = _get_forecast_df()
+        if (real is None) or (prev is None) or real.empty or prev.empty:
+            st.info("Não foi possível exibir o gráfico Real × Previsão: dados ausentes ou inválidos.")
+        else:
+            df_long = pd.concat(
+                [
+                    pd.DataFrame({"ds": real["ds"], "valor": real["y"], "série": "Real"}),
+                    pd.DataFrame({"ds": prev["ds"], "valor": prev["y"], "série": "Previsão"}),
+                ],
+                ignore_index=True,
+            )
+            chart = (
+                alt.Chart(df_long.reset_index(drop=True))
+                .mark_line()
+                .encode(
+                    x=alt.X("ds:T", title="Mês"),
+                    y=alt.Y("valor:Q", title="Quantidade"),
+                    color=alt.Color(
+                        "série:N",
+                        scale=alt.Scale(domain=["Real", "Previsão"], range=["#1e3a8a", "#60a5fa"]),
+                        legend=alt.Legend(title=None, orient="top"),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("ds:T", title="Período"),
+                        alt.Tooltip("série:N", title="Série"),
+                        alt.Tooltip("valor:Q", title="Valor", format=",.0f"),
+                    ],
                 )
-                fig_atp.update_layout(height=360)
-                st.plotly_chart(fig_atp, use_container_width=True)
-            except Exception as e:
-                st.info(f"Não foi possível gerar o gráfico de ATP: {e}")
-        elif "atp" not in mps_df.columns:
-            st.info("O MPS atual não possui coluna **atp**; gere novamente na página 06, se necessário.")
-        else:
-            st.info("Plotly não está instalado neste ambiente. Instale `plotly` para visualizar o gráfico de ATP.")
+                .properties(height=320, width="container")
+                .interactive()
+            )
+            st.altair_chart(chart, use_container_width=True)
 
-        st.divider()
-        c1, c2 = st.columns(2)
-        with c1:
-            st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ajustar Inputs do MPS", icon="⚙️")
-        with c2:
-            st.page_link("pages/06_MPS.py", label="🗓️ Recalcular MPS", icon="🗓️")
+# =============================================================================
+# 2) MPS & KPIs
+# =============================================================================
+with tab_mps:
+    st.subheader("KPIs do MPS")
 
+    # Caso você tenha salvo algo na sessão na página 06 (opcional):
+    #   - "mps_df"       : DataFrame detalhado
+    #   - "mps_display"  : tabela agregada de visualização
+    #   - "mps_labels"   : lista de timestamps dos meses
+    mps_df = st.session_state.get("mps_df")
+    mps_display = st.session_state.get("mps_display")
+    mps_labels = st.session_state.get("mps_labels")
 
-# ============================================================================
-# TAB 3 — RECOMENDAÇÕES
-# ============================================================================
-with tabs[2]:
-    st.subheader("Recomendações automáticas")
-
-    # Usa diagnósticos e informações que já existem em sessão quando possível
-    recs = []
-
-    # Tipo de demanda (se salvo na análise detalhada)
-    demand_type = st.session_state.get("demand_type")  # "Regular", "Intermittent", ...
-    if demand_type:
-        if demand_type in {"Intermittent", "Lumpy"}:
-            recs.append("Aplicar **Croston/SBA/TSB** (demanda intermitente).")
-        elif demand_type == "Erratic":
-            recs.append("Demanda **errática**: suavização robusta/outlier handling e modelos sem sazonalidade rígida.")
-        else:
-            recs.append("Demanda **regular**: modelos clássicos (com/sem sazonalidade) tendem a funcionar.")
-
-    # Transformações sugeridas (flags salvos na Análise Detalhada, se houver)
-    hetero_flag = st.session_state.get("hetero_flag")
-    if hetero_flag:
-        recs.append("Sinais de **heterocedasticidade** → considerar **log** ou **Box-Cox**.")
-
-    has_nonpositive = st.session_state.get("has_nonpositive")
-    skew_val = st.session_state.get("skew_val")
-    if has_nonpositive:
-        recs.append("Há valores **≤ 0** → usar **Box-Cox** com deslocamento.")
-    elif (skew_val is not None) and (skew_val == skew_val) and (skew_val > 0.5):
-        recs.append("Distribuição **positiva** e **assimétrica** → **log(y)** recomendado.")
-
-    # Força STL (se disponível)
-    Ft = st.session_state.get("stl_F_trend")
-    Fs = st.session_state.get("stl_F_seas")
-    if Ft is not None and Ft == Ft and Ft < 0.2:
-        recs.append("**Tendência fraca** (STL) → evitar modelos com tendência rígida.")
-    if Fs is not None and Fs == Fs and Fs < 0.2:
-        recs.append("**Sazonalidade fraca** (STL) → considerar modelos **sem sazonalidade**.")
-
-    # Segurança para caso nada esteja na sessão
-    if not recs:
-        st.info("Sem recomendações automáticas no momento. Gere diagnósticos na aba **Análise Detalhada**.")
-        _link_row("Ir:", "pages/03_Analise_Detalhada.py", "Análise Detalhada", "🧪")
+    if isinstance(mps_display, pd.DataFrame) and not mps_display.empty:
+        # formata cabeçalhos como mês/ano curtos
+        cols = []
+        for c in mps_display.columns:
+            try:
+                dt = pd.to_datetime(c, errors="coerce")
+                cols.append(fmt_month_label(dt) if pd.notna(dt) else str(c))
+            except Exception:
+                cols.append(str(c))
+        mps_show = mps_display.copy()
+        mps_show.columns = cols
+        st.dataframe(mps_show, use_container_width=True, height=280)
     else:
-        st.markdown("\n".join(f"- {r}" for r in recs))
+        st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte.")
+        st.page_link("pages/06_MPS.py", label="📅 Ir para 06_MPS (Plano Mestre de Produção)")
 
-    st.divider()
-    cL, cR = st.columns(2)
-    with cL:
-        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS")
-    with cR:
-        st.page_link("pages/06_MPS.py", label="🗓️ MPS")
+    # KPIs rápidos (se mps_df estiver disponível)
+    if isinstance(mps_df, pd.DataFrame) and not mps_df.empty:
+        # Exemplos de KPIs simples
+        est_min = int(mps_df.get("projected_on_hand_end", pd.Series(dtype=float)).min(skipna=True) or 0)
+        rupturas = int((mps_df.get("projected_on_hand_end", pd.Series(dtype=float)) < 0).sum())
+        qtd_programada = int(mps_df.get("planned_order_receipts", pd.Series(dtype=float)).sum(skipna=True) or 0)
+
+        c1, c2, c3 = st.columns(3)
+        kpi_card("Estoque projetado mínimo", f"{est_min}")
+        with c2:
+            kpi_card("Períodos com ruptura (EOH < 0)", f"{rupturas}")
+        with c3:
+            kpi_card("Qtde total programada (MPS)", f"{qtd_programada:,}".replace(",", "."))
+
+# =============================================================================
+# 3) Recomendações
+# =============================================================================
+with tab_rec:
+    st.subheader("Recomendações automáticas")
+    bullets = []
+
+    # Baseado nos experimentos
+    exp_df = _get_exp_df()
+    if exp_df is not None and "sMAPE" in exp_df.columns:
+        try:
+            best = float(exp_df["sMAPE"].min())
+            if best > 30:
+                bullets.append("sMAPE alto → considerar **ajustar pré-processamento** (log/Box-Cox/outliers) ou **ampliar grade** de modelos.")
+            elif best > 15:
+                bullets.append("sMAPE moderado → testar **mais réplicas de bootstrap** e revisar sazonalidade.")
+            else:
+                bullets.append("sMAPE baixo → manter configuração atual; avalie **robustez** com validação/bootstraps.")
+        except Exception:
+            pass
+    else:
+        bullets.append("Gere a previsão e os experimentos na aba **Previsão** para recomendações mais específicas.")
+
+    # Comportamento da previsão vs real
+    real = _get_real_series()
+    prev = _get_forecast_df()
+    if real is not None and prev is not None and not real.empty and not prev.empty:
+        # Checagem simples de viés (últimos 6 pontos em comum)
+        merged = pd.merge(real, prev, on="ds", how="inner", suffixes=("_real", "_prev"))
+        if len(merged) >= 6:
+            win = merged.tail(6).copy()
+            err = (win["y_prev"] - win["y_real"]).mean()
+            if err > 0:
+                bullets.append("Previsão **otimista** nos últimos meses (tende a **superestimar**). Avalie ajuste de tendência.")
+            elif err < 0:
+                bullets.append("Previsão **conservadora** nos últimos meses (tende a **subestimar**). Avalie ajuste de tendência.")
+            else:
+                bullets.append("Previsão sem viés aparente nos últimos meses.")
+
+    if bullets:
+        st.markdown("\n".join(f"- {b}" for b in bullets))
+    else:
+        st.markdown("- Sem recomendações automáticas no momento.")
+
+# =============================================================================
+# Rodapé – navegação
+# =============================================================================
+st.divider()
+c1, c2 = st.columns(2)
+with c1:
+    st.page_link("pages/05_Inputs_MPS.py", label="Voltar: Inputs do MPS")
+with c2:
+    st.page_link("pages/04_Previsao.py", label="Ajustar Previsão")

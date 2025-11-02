@@ -413,20 +413,25 @@ if res is not None:
     st.altair_chart(chart, use_container_width=True)
 
     # ===== Experimentos — botão de download (se houver)
+    # ===== Experimentos — salvar na sessão e oferecer APENAS o download em CSV
     st.subheader("📦 Experimentos")
-    exp_df = ss.get("exp_table")
-    if isinstance(exp_df, pd.DataFrame) and not exp_df.empty:
-        st.caption("Amostra da tabela (primeiras 100 linhas):")
-        st.dataframe(exp_df.head(100), use_container_width=True)
+    try:
+        # guarda a tabela completa na sessão p/ a página 07
+        exp_df = res.reset_index(drop=True)
+        st.session_state["experiments_df"] = exp_df.copy()
+
+        # oferece somente o botão de download (sem mostrar tabela na tela)
+        csv_bytes = exp_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             "⬇️ Baixar todos os experimentos (CSV)",
-            data=ss.get("experiments_csv", exp_df.to_csv(index=False).encode("utf-8")),
+            data=csv_bytes,
             file_name="experimentos_previsao.csv",
             mime="text/csv",
             help="Contém todas as combinações testadas com métricas e parâmetros."
         )
-    else:
+    except Exception:
         st.info("Resultados dos experimentos indisponíveis para exportação.")
+
 
     # =============================
     # 🔗 Próximos passos (à ESQUERDA + botão mais fino)
