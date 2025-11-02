@@ -343,6 +343,6 @@ st.markdown("\n".join(f"- {r}" for r in recs) if recs else "- Sem recomendaçõe
 st.divider()
 cL, cR = st.columns(2, gap="large")
 with cL:
-    st.page_link("pages/02_Serie_Temporal.py", label="⬅️ Voltar — Série Temporal", icon="📈")
+    st.page_link("pages/02_Serie_Temporal.py", label="⬅️ Voltar — Série Temporal")
 with cR:
-    st.page_link("pages/04_Previsao.py", label="➡️ Seguir — Previsão", icon="🔮")
+    st.page_link("pages/04_Previsao.py", label="➡️ Seguir — Previsão")
