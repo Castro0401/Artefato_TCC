@@ -1,271 +1,296 @@
 # pages/07_Dashboard_Conclusao.py
 from __future__ import annotations
-
-import pandas as pd
 import numpy as np
+import pandas as pd
 import streamlit as st
-import altair as alt
 
 st.set_page_config(page_title="Conclusão", page_icon="✅", layout="wide")
 st.title("✅ 07 — Conclusão (Painel de Decisão)")
 
-# =============================================================================
+# -----------------------------
 # Helpers
-# =============================================================================
-_PT = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
-_REV_PT = {v:k for k, v in _PT.items()}
-
-def to_month_begin(v) -> pd.Timestamp | pd.NaT:
-    """Converte rótulos 'Set/25' ou strings de data para Timestamp no 1º dia do mês."""
-    if isinstance(v, pd.Timestamp):
-        return pd.Timestamp(year=v.year, month=v.month, day=1)
-    s = str(v)
-    if "/" in s and len(s) <= 6:
-        try:
-            mon, yy = s.split("/")
-            return pd.Timestamp(year=2000 + int(yy), month=_PT[mon], day=1)
-        except Exception:
-            return pd.NaT
+# -----------------------------
+def _safe_num(x, nd=2):
     try:
-        dt = pd.to_datetime(s, errors="coerce")
-        if pd.isna(dt):
-            return pd.NaT
-        return pd.Timestamp(year=dt.year, month=dt.month, day=1)
+        v = float(x)
+        if np.isnan(v): return "—"
+        if abs(v) >= 1000:
+            return f"{v:,.0f}".replace(",", ".")
+        return f"{v:.{nd}f}"
+    except Exception:
+        return "—"
+
+def _to_ts(x):
+    # aceita 'Set/25', Timestamp ou string ISO
+    if isinstance(x, pd.Timestamp):
+        return x
+    s = str(x)
+    # label tipo "Set/25"
+    _PT = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,"Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
+    if "/" in s and len(s) in (6,7):
+        mon, yy = s.split("/")
+        try:
+            return pd.Timestamp(year=2000+int(yy), month=_PT.get(mon.title(), 1), day=1)
+        except Exception:
+            pass
+    # ISO fallback
+    try:
+        return pd.to_datetime(s, errors="coerce")
     except Exception:
         return pd.NaT
 
-def fmt_month_label(ts: pd.Timestamp) -> str:
-    """Formata Timestamp -> 'Set/25' (mês/ano 2 dígitos)."""
-    return f"{_REV_PT.get(int(ts.month), '???')}/{str(ts.year)[-2:]}"
+def _kpi(label, value, help_text=None, key=None):
+    c = st.container()
+    with c:
+        st.metric(label, value)
+        if help_text:
+            st.caption(help_text)
+    return c
 
-def _get_exp_df() -> pd.DataFrame | None:
-    """Busca a tabela de experimentos com segurança (sem usar 'or' com DataFrame)."""
-    for key in ("experiments_df", "experiments_table", "pipeline_experiments"):
-        obj = st.session_state.get(key)
-        if isinstance(obj, pd.DataFrame) and len(obj) > 0:
-            # normaliza algumas colunas comuns (se existirem)
-            df = obj.copy()
-            if "sMAPE" in df.columns:
-                # assegura tipo numérico
-                df["sMAPE"] = pd.to_numeric(df["sMAPE"], errors="coerce")
-            if "MAE" in df.columns:
-                df["MAE"] = pd.to_numeric(df["MAE"], errors="coerce")
-            if "RMSE" in df.columns:
-                df["RMSE"] = pd.to_numeric(df["RMSE"], errors="coerce")
-            return df
-    return None
+# -----------------------------
+# Recuperos de memória
+# -----------------------------
+ss = st.session_state
+res = ss.get("last_result")                   # resultado da previsão (dict-like com attrs)
+fcst_df = ss.get("forecast_df")              # df salvo na pág. 04 (ds,y)
+hist_df_norm = ss.get("ts_df_norm")          # upload normalizado (ds,y)
+mps_tbl_display = ss.get("mps_table")        # tabela do MPS (a de exibição)
+mps_detail = ss.get("mps_detail")            # detalhe do core (se você decidir guardar)
+exp_df = (
+    ss.get("experiments_df")
+    or ss.get("experiments_table")
+    or ss.get("pipeline_experiments")
+)
 
-def _get_real_series() -> pd.DataFrame | None:
-    """Traz série real da sessão e padroniza a coluna 'ds' para datetime."""
-    if "ts_df_monthly" in st.session_state and isinstance(st.session_state["ts_df_monthly"], pd.DataFrame):
-        df = st.session_state["ts_df_monthly"].copy()
-        if "ds" in df.columns and "y" in df.columns:
-            df["ds"] = pd.to_datetime(df["ds"], errors="coerce").map(to_month_begin)
-            return df[["ds", "y"]].dropna()
-    if "ts_df_norm" in st.session_state and isinstance(st.session_state["ts_df_norm"], pd.DataFrame):
-        df = st.session_state["ts_df_norm"].copy()
-        if "ds" in df.columns and "y" in df.columns:
-            df["ds"] = df["ds"].map(to_month_begin)
-            return df[["ds", "y"]].dropna()
-    return None
+tabs = st.tabs(["📊 Acurácia", "🧭 Vieses", "🏭 MPS & KPIs", "💡 Recomendações"])
 
-def _get_forecast_df() -> pd.DataFrame | None:
-    """Traz previsão salva p/ MPS (ds,y) e padroniza 'ds' para datetime."""
-    f = st.session_state.get("forecast_df")
-    if isinstance(f, pd.DataFrame) and {"ds","y"}.issubset(f.columns):
-        out = f.copy()
-        out["ds"] = pd.to_datetime(out["ds"], errors="coerce").map(to_month_begin)
-        return out.dropna()
-    # fallback: tentar extrair do last_result.attrs
-    res = st.session_state.get("last_result")
-    if res is not None and hasattr(res, "attrs"):
-        for key in ("forecast","forecast_df","yhat","pred","prediction"):
-            if key in res.attrs:
-                obj = res.attrs[key]
-                if isinstance(obj, pd.DataFrame) and {"ds","yhat"}.issubset(obj.columns):
-                    out = obj.rename(columns={"yhat":"y"})[["ds","y"]].copy()
-                    out["ds"] = pd.to_datetime(out["ds"], errors="coerce").map(to_month_begin)
-                    return out.dropna()
-                if isinstance(obj, pd.Series):
-                    out = pd.DataFrame({"ds": obj.index, "y": obj.values})
-                    out["ds"] = pd.to_datetime(out["ds"], errors="coerce").map(to_month_begin)
-                    return out.dropna()
-    return None
-
-def kpi_card(label: str, value: str, small: bool = False):
-    st.markdown(
-        f"""
-        <div style="display:flex;flex-direction:column;gap:2px;">
-          <small style="color:#6b7280;font-size:0.85rem;">{label}</small>
-          <div style="font-size:{'1.2rem' if small else '1.6rem'};font-weight:600;line-height:1.1;">{value}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# =============================================================================
-# Tabs
-# =============================================================================
-tab_acc, tab_mps, tab_rec = st.tabs(["Acurácia", "MPS & KPIs", "Recomendações"])
-
-# =============================================================================
-# 1) Acurácia
-# =============================================================================
-with tab_acc:
+# ======================================================
+# TAB 1 — ACURÁCIA (cards enxutos + gráfico limpo)
+# ======================================================
+with tabs[0]:
     st.subheader("Desempenho dos modelos de previsão")
 
-    # Experimentos (vêm da página 04)
-    exp_df = _get_exp_df()
-    if exp_df is None:
-        st.info("Sem tabela de experimentos em memória. Gere na página de **Previsão** e volte aqui.")
-        st.page_link("pages/04_Previsao.py", label="🧙 Ir para 04_Previsao")
+    # ----------------- pega campeão + métricas -----------------
+    champion = {}
+    if res is not None and hasattr(res, "attrs"):
+        champion = res.attrs.get("champion", {}) or {}
+
+    # KPIs do campeão (se existirem)
+    c1, c2, c3, c4 = st.columns(4)
+    _kpi("MAE",        _safe_num(champion.get("MAE")),        "Erro Médio Absoluto", key="mae")
+    _kpi("sMAPE (%)",  _safe_num(champion.get("sMAPE")),      "Erro percentual simétrico", key="smape")
+    _kpi("RMSE",       _safe_num(champion.get("RMSE")),       "Raiz do erro quadrático médio", key="rmse")
+    _kpi("MAPE (%)",   _safe_num(champion.get("MAPE")),       "Erro percentual médio", key="mape")
+
+    st.markdown("---")
+
+    # ----------------- gráfico Real x Previsão -----------------
+    # histórico: da memória do upload
+    hist = None
+    if isinstance(hist_df_norm, pd.DataFrame) and {"ds","y"}.issubset(hist_df_norm.columns):
+        hist = hist_df_norm.copy()
+        hist["ds"] = hist["ds"].apply(_to_ts)
+        hist = hist.dropna(subset=["ds"]).rename(columns={"y":"Real"})
+
+    # previsão: da memória salva na 04
+    prev = None
+    if isinstance(fcst_df, pd.DataFrame) and {"ds","y"}.issubset(fcst_df.columns):
+        prev = fcst_df.copy()
+        prev["ds"] = prev["ds"].apply(_to_ts)
+        prev = prev.dropna(subset=["ds"]).rename(columns={"y":"Previsão"})
+
+    if hist is None:
+        st.info("Sem histórico em memória. Gere o upload na página **01_Upload**.")
     else:
-        # KPIs resumidos do experimento vencedor (se houver indicação na sessão)
-        champ = {}
-        res = st.session_state.get("last_result")
-        if res is not None and hasattr(res, "attrs"):
-            champ = res.attrs.get("champion", {}) or {}
+        # monta long para plot
+        plot_df = pd.DataFrame({"ds": hist["ds"], "série": "Real", "valor": hist["Real"]})
+        if prev is not None and len(prev) > 0:
+            plot_df = pd.concat([
+                plot_df,
+                pd.DataFrame({"ds": prev["ds"], "série": "Previsão", "valor": prev["Previsão"]})
+            ], ignore_index=True)
 
-        c1, c2, c3, c4 = st.columns(4)
-        def _fmt(x):
-            try:
-                return f"{float(x):.4g}"
-            except Exception:
-                return "—"
-        c1.kpi = kpi_card("MAE", _fmt(champ.get("MAE")))
-        c2.kpi = kpi_card("sMAPE (%)", _fmt(champ.get("sMAPE")))
-        c3.kpi = kpi_card("RMSE", _fmt(champ.get("RMSE")))
-        c4.kpi = kpi_card("MAPE (%)", _fmt(champ.get("MAPE")))
-
-        # Gráfico Real x Previsão
-        real = _get_real_series()
-        prev = _get_forecast_df()
-        if (real is None) or (prev is None) or real.empty or prev.empty:
-            st.info("Não foi possível exibir o gráfico Real × Previsão: dados ausentes ou inválidos.")
-        else:
-            df_long = pd.concat(
-                [
-                    pd.DataFrame({"ds": real["ds"], "valor": real["y"], "série": "Real"}),
-                    pd.DataFrame({"ds": prev["ds"], "valor": prev["y"], "série": "Previsão"}),
-                ],
-                ignore_index=True,
+        import altair as alt
+        chart = (
+            alt.Chart(plot_df)
+            .mark_line()
+            .encode(
+                x=alt.X("ds:T", title="Mês"),
+                y=alt.Y("valor:Q", title="Quantidade"),
+                color=alt.Color(
+                    "série:N",
+                    scale=alt.Scale(domain=["Real","Previsão"], range=["#1e3a8a", "#60a5fa"]),
+                    legend=alt.Legend(title=None, orient="top")
+                ),
+                tooltip=[
+                    alt.Tooltip("ds:T", title="Período"),
+                    alt.Tooltip("série:N", title="Série"),
+                    alt.Tooltip("valor:Q", title="Valor", format=",.0f"),
+                ]
             )
-            chart = (
-                alt.Chart(df_long.reset_index(drop=True))
-                .mark_line()
-                .encode(
-                    x=alt.X("ds:T", title="Mês"),
-                    y=alt.Y("valor:Q", title="Quantidade"),
-                    color=alt.Color(
-                        "série:N",
-                        scale=alt.Scale(domain=["Real", "Previsão"], range=["#1e3a8a", "#60a5fa"]),
-                        legend=alt.Legend(title=None, orient="top"),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("ds:T", title="Período"),
-                        alt.Tooltip("série:N", title="Série"),
-                        alt.Tooltip("valor:Q", title="Valor", format=",.0f"),
-                    ],
-                )
-                .properties(height=320, width="container")
-                .interactive()
-            )
-            st.altair_chart(chart, use_container_width=True)
+            .properties(height=360, width="container")
+            .interactive()
+        )
+        st.altair_chart(chart, use_container_width=True)
 
-# =============================================================================
-# 2) MPS & KPIs
-# =============================================================================
-with tab_mps:
+    st.markdown("—")
+    # Download dos experimentos (não exibir tabela gigante aqui)
+    if isinstance(exp_df, pd.DataFrame) and len(exp_df) > 0:
+        st.download_button(
+            "⬇️ Baixar todos os experimentos (CSV)",
+            data=exp_df.to_csv(index=False).encode("utf-8"),
+            file_name="experimentos_previsao.csv",
+            mime="text/csv",
+            help="CSV com todas as combinações testadas, métricas e parâmetros."
+        )
+    else:
+        st.caption("Sem tabela de experimentos em memória. Gere na página de **Previsão** e volte.")
+
+    st.divider()
+    cL, cR = st.columns(2)
+    with cL:
+        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")
+    with cR:
+        st.page_link("pages/04_Previsao.py", label="🛠️ Ajustar Previsão", icon="🧪")
+
+# ======================================================
+# TAB 2 — VIESES (com fallback)
+# ======================================================
+with tabs[1]:
+    st.subheader("Diagnóstico de vieses da previsão")
+
+    # Tentamos montar uma base com y_true x y_pred.
+    # 1) Se o pipeline guardou 'backtest' em attrs:
+    bt = None
+    if res is not None and hasattr(res, "attrs"):
+        # procura formatos comuns
+        for k in ["backtest", "oos_eval", "cv_last", "val_df", "fitted_df"]:
+            obj = res.attrs.get(k)
+            if isinstance(obj, pd.DataFrame) and {"ds","y_true","y_pred"}.issubset(obj.columns):
+                bt = obj[["ds","y_true","y_pred"]].copy()
+                bt["ds"] = pd.to_datetime(bt["ds"])
+                break
+
+    # 2) Caso não tenha backtest, não dá pra avaliar viés de maneira honesta.
+    if bt is None:
+        st.info(
+            "Não encontrei um **backtest** com `y_true` e `y_pred` no resultado da previsão. "
+            "Sem esses dados não é possível calcular vieses históricos. "
+            "Se quiser, podemos adicionar cross-validation ao pipeline para habilitar essa aba."
+        )
+    else:
+        bt = bt.sort_values("ds")
+        bt["erro"] = bt["y_pred"] - bt["y_true"]
+        bias_abs = float(bt["erro"].mean()) if bt["erro"].notna().any() else np.nan
+        pct = np.where(bt["y_true"] != 0, bt["erro"] / bt["y_true"], np.nan)
+        bias_pct = float(np.nanmean(pct)) * 100.0
+
+        c1, c2 = st.columns(2)
+        _kpi("Viés (nível)", _safe_num(bias_abs), "média de (previsto − real)")
+        _kpi("Viés (%)", _safe_num(bias_pct), "média de (previsto − real)/real × 100")
+
+        st.caption(
+            "Interpretação: valores **positivos** indicam **superestimação**; negativos, **subestimação**. "
+            "Quanto mais próximo de 0, menor o viés."
+        )
+
+        # Curva dos erros
+        import altair as alt
+        ch = (
+            alt.Chart(bt[["ds","erro"]])
+            .mark_line(color="#525252")
+            .encode(x="ds:T", y="erro:Q", tooltip=["ds:T", alt.Tooltip("erro:Q", format=",.2f")])
+            .properties(height=280, width="container")
+            .interactive()
+        )
+        st.altair_chart(ch, use_container_width=True)
+
+# ======================================================
+# TAB 3 — MPS & KPIs (robusto)
+# ======================================================
+with tabs[2]:
     st.subheader("KPIs do MPS")
 
-    # Caso você tenha salvo algo na sessão na página 06 (opcional):
-    #   - "mps_df"       : DataFrame detalhado
-    #   - "mps_display"  : tabela agregada de visualização
-    #   - "mps_labels"   : lista de timestamps dos meses
-    mps_df = st.session_state.get("mps_df")
-    mps_display = st.session_state.get("mps_display")
-    mps_labels = st.session_state.get("mps_labels")
-
-    if isinstance(mps_display, pd.DataFrame) and not mps_display.empty:
-        # formata cabeçalhos como mês/ano curtos
-        cols = []
-        for c in mps_display.columns:
-            try:
-                dt = pd.to_datetime(c, errors="coerce")
-                cols.append(fmt_month_label(dt) if pd.notna(dt) else str(c))
-            except Exception:
-                cols.append(str(c))
-        mps_show = mps_display.copy()
-        mps_show.columns = cols
-        st.dataframe(mps_show, use_container_width=True, height=280)
-    else:
+    if not isinstance(mps_tbl_display, pd.DataFrame) or mps_tbl_display.empty:
         st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte.")
         st.page_link("pages/06_MPS.py", label="📅 Ir para 06_MPS (Plano Mestre de Produção)")
-
-    # KPIs rápidos (se mps_df estiver disponível)
-    if isinstance(mps_df, pd.DataFrame) and not mps_df.empty:
-        # Exemplos de KPIs simples
-        est_min = int(mps_df.get("projected_on_hand_end", pd.Series(dtype=float)).min(skipna=True) or 0)
-        rupturas = int((mps_df.get("projected_on_hand_end", pd.Series(dtype=float)) < 0).sum())
-        qtd_programada = int(mps_df.get("planned_order_receipts", pd.Series(dtype=float)).sum(skipna=True) or 0)
-
-        c1, c2, c3 = st.columns(3)
-        kpi_card("Estoque projetado mínimo", f"{est_min}")
-        with c2:
-            kpi_card("Períodos com ruptura (EOH < 0)", f"{rupturas}")
-        with c3:
-            kpi_card("Qtde total programada (MPS)", f"{qtd_programada:,}".replace(",", "."))
-
-# =============================================================================
-# 3) Recomendações
-# =============================================================================
-with tab_rec:
-    st.subheader("Recomendações automáticas")
-    bullets = []
-
-    # Baseado nos experimentos
-    exp_df = _get_exp_df()
-    if exp_df is not None and "sMAPE" in exp_df.columns:
-        try:
-            best = float(exp_df["sMAPE"].min())
-            if best > 30:
-                bullets.append("sMAPE alto → considerar **ajustar pré-processamento** (log/Box-Cox/outliers) ou **ampliar grade** de modelos.")
-            elif best > 15:
-                bullets.append("sMAPE moderado → testar **mais réplicas de bootstrap** e revisar sazonalidade.")
+    else:
+        # formata cabeçalhos de datas para Mês/Ano
+        new_cols = []
+        for c in mps_tbl_display.columns:
+            ts = _to_ts(c)
+            if pd.isna(ts):
+                new_cols.append(str(c))
             else:
-                bullets.append("sMAPE baixo → manter configuração atual; avalie **robustez** com validação/bootstraps.")
+                new_cols.append(ts.strftime("%b/%y").title().replace(".", ""))  # Set/25 etc.
+        mps_show = mps_tbl_display.copy()
+        mps_show.columns = new_cols
+
+        # exibe
+        st.dataframe(mps_show, use_container_width=True, height=320)
+
+        # KPIs simples (exemplo)
+        try:
+            estoque_final = int(mps_tbl_display.loc["Estoque Proj.", mps_tbl_display.columns[-1]])
+        except Exception:
+            estoque_final = np.nan
+        try:
+            tot_receb = int(mps_tbl_display.loc["Qtde. MPS"].sum())
+        except Exception:
+            tot_receb = np.nan
+        try:
+            atp_ultimo = int(mps_tbl_display.loc["ATP(cum)"].iloc[-1])
+        except Exception:
+            atp_ultimo = np.nan
+
+        st.markdown("### Resumo")
+        k1, k2, k3 = st.columns(3)
+        _kpi("Estoque Projetado (final do horizonte)", _safe_num(estoque_final, 0))
+        _kpi("Total planejado (Qtde. MPS)", _safe_num(tot_receb, 0))
+        _kpi("ATP acumulado (último período)", _safe_num(atp_ultimo, 0))
+
+        st.caption("KPIs adicionais (cobertura, OTIF simulado, rupturas projetadas etc.) podem ser incluídos conforme sua regra de negócio.")
+
+    st.divider()
+    cL, cR = st.columns(2)
+    with cL:
+        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")
+    with cR:
+        st.page_link("pages/04_Previsao.py", label="🛠️ Ajustar Previsão", icon="🧪")
+
+# ======================================================
+# TAB 4 — Recomendações (texto curto e objetivo)
+# ======================================================
+with tabs[3]:
+    st.subheader("Recomendações")
+    recs = []
+
+    # com base no campeão
+    if champion:
+        smape = champion.get("sMAPE")
+        if smape is not None and isinstance(smape, (int, float)):
+            if smape > 30:
+                recs.append("sMAPE alto → considerar **mais dados**, **tratamento de outliers** e/ou **outro modelo**.")
+            elif smape > 15:
+                recs.append("sMAPE moderado → ajuste fino de **hiperparâmetros** e checagem de **sazonalidade**.")
+            else:
+                recs.append("sMAPE baixo → manter configuração atual e acompanhar periodicamente.")
+
+    # sugestão de operação com MPS disponível
+    if isinstance(mps_tbl_display, pd.DataFrame) and not mps_tbl_display.empty:
+        try:
+            estoque_final = int(mps_tbl_display.loc["Estoque Proj.", mps_tbl_display.columns[-1]])
+            if estoque_final < 0:
+                recs.append("Estoque projetado **negativo** no fim do horizonte → **antecipar** produção/compras.")
+            elif estoque_final == 0:
+                recs.append("Estoque projetado **zerado** no fim do horizonte → atenção a possíveis **rupturas**.")
         except Exception:
             pass
-    else:
-        bullets.append("Gere a previsão e os experimentos na aba **Previsão** para recomendações mais específicas.")
 
-    # Comportamento da previsão vs real
-    real = _get_real_series()
-    prev = _get_forecast_df()
-    if real is not None and prev is not None and not real.empty and not prev.empty:
-        # Checagem simples de viés (últimos 6 pontos em comum)
-        merged = pd.merge(real, prev, on="ds", how="inner", suffixes=("_real", "_prev"))
-        if len(merged) >= 6:
-            win = merged.tail(6).copy()
-            err = (win["y_prev"] - win["y_real"]).mean()
-            if err > 0:
-                bullets.append("Previsão **otimista** nos últimos meses (tende a **superestimar**). Avalie ajuste de tendência.")
-            elif err < 0:
-                bullets.append("Previsão **conservadora** nos últimos meses (tende a **subestimar**). Avalie ajuste de tendência.")
-            else:
-                bullets.append("Previsão sem viés aparente nos últimos meses.")
-
-    if bullets:
-        st.markdown("\n".join(f"- {b}" for b in bullets))
+    if recs:
+        st.markdown("\n".join(f"- {r}" for r in recs))
     else:
         st.markdown("- Sem recomendações automáticas no momento.")
 
-# =============================================================================
-# Rodapé – navegação
-# =============================================================================
-st.divider()
-c1, c2 = st.columns(2)
-with c1:
-    st.page_link("pages/05_Inputs_MPS.py", label="Voltar: Inputs do MPS")
-with c2:
-    st.page_link("pages/04_Previsao.py", label="Ajustar Previsão")
+    st.divider()
+    st.page_link("pages/06_MPS.py", label="📅 Abrir MPS", icon="🗓️")

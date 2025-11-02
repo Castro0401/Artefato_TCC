@@ -167,6 +167,12 @@ display_tbl = pd.DataFrame(
     columns=labels_fmt,       # <<< usa colunas formatadas 'Mês/Ano'
 )
 
+# ... depois de montar 'display_tbl' (Previsto, Em carteira, etc.)
+st.session_state["mps_table"] = display_tbl.copy()   # 👈 usado pela página 07
+# Se quiser, também pode guardar o detalhado do core:
+st.session_state["mps_detail"] = mps_df.copy()
+
+
 st.subheader("📅 MPS — Visualização Mensal")
 
 # Altura dinâmica para não aparecer “linha em branco” (preenchimento do grid)
