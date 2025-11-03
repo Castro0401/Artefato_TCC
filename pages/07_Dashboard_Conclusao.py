@@ -225,10 +225,15 @@ with tabs[1]:
         # MAE do backtest para escalar a conclusão
         mae_bt = float(np.nanmean(np.abs(bt["erro"]))) if bt["erro"].notna().any() else np.nan
 
-        c1, c2, c3 = st.columns(3)
-        _kpi("Viés (nível)", _safe_num(bias_abs), "Média de (previsto − real)")
-        _kpi("Viés (%)", _safe_num(bias_pct), "Média de (previsto − real)/real × 100")
-        _kpi("MAE (backtest)", _safe_num(mae_bt), "Média do |erro| no período de teste")
+        # KPIs lado a lado
+        c1, c2, c3 = st.columns(3, gap="large")
+        with c1:
+            _kpi("Viés (nível)", _safe_num(bias_abs), "Média de (previsto − real)")
+        with c2:
+            _kpi("Viés (%)", _safe_num(bias_pct), "Média de (previsto − real)/real × 100")
+        with c3:
+            _kpi("MAE (backtest)", _safe_num(mae_bt), "Média do |erro| no período de teste")
+
 
         st.caption(
             "Interpretação: valores **positivos** indicam **superestimação**; negativos, **subestimação**. "
