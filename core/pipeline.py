@@ -961,18 +961,35 @@ def run_full_pipeline(
 
     df_out = pd.DataFrame(rows)
 
-    # ========= PATCH: forecast + backtest do campeão =========
-def _champion_forecast_and_backtest(base_series: pd.Series,
-                                    horizon: int,
-                                    seasonal_period: int,
-                                    champion_row: pd.Series,
-                                    forward_transform=None,
-                                    inverse_transform=None):
-    """
-    Retorna (forecast_df, backtest_df) do campeão.
-      - forecast_df: ds,y (previsão futura em escala original)
-      - backtest_df: ds,y_true,y_pred (holdout dos últimos `horizon` meses)
-    """
+  # === CAMPEÃO + FORECAST + BACKTEST (único ponto da verdade) ===
+# Seleciona o campeão
+champion = select_champion(df_out)
+log("===== CAMPEÃO (critério: menor MAE; desempates por RMSE/soma/simplicidade) =====")
+log(f"Preprocess: {champion['preprocess']} | Params: {champion['preprocess_params']}")
+log(f"Modelo: {champion['model']} | Hiperparâmetros: {champion['model_params']}")
+log(f"MAE={champion['MAE']:.6g} | RMSE={champion['RMSE']:.6g} | MAPE={champion['MAPE']:.6g} | sMAPE={champion['sMAPE']:.6g}")
+
+# Reconstrói a transformação do campeão (se for log) para medir/voltar à escala original
+prep = str(champion.get("preprocess", "original")).lower()
+fwd_transform, inv_transform = (None, None)
+if prep.startswith("log"):
+    # reaproveita epsilon/shift do texto; se não achar, recalcula
+    fwd_transform, inv_transform, _ = _log_fwd_inv_from_params(
+        load_series(data_input) if not isinstance(data_input, (pd.Series, pd.DataFrame)) else ensure_monthly_series(pd.DataFrame({"ds": base_series.index, "y": base_series.values}))
+        if False else base_series,  # base_series já existe
+        str(champion.get("preprocess_params",""))
+    )
+
+# Gera backtest (y_true x y_pred) e forecast futuro do campeão
+def _champion_forecast_and_backtest(
+    base_series: pd.Series,
+    horizon: int,
+    seasonal_period: int,
+    champion_row: pd.Series,
+    forward_transform=None,
+    inverse_transform=None
+):
+    """Retorna (forecast_df, backtest_df) do campeão, ambos na escala original."""
     s_mdl = forward_transform(base_series) if forward_transform else base_series
     s_mdl = pd.Series(np.asarray(s_mdl, dtype=float), index=base_series.index)
 
@@ -983,7 +1000,8 @@ def _champion_forecast_and_backtest(base_series: pd.Series,
     model = str(champion_row["model"])
     params = str(champion_row["model_params"])
 
-    # ---------- BACKTEST (one-step, walk-forward quando aplicável) ----------
+    # -------- backtest (walk-forward quando aplicável) --------
+    import re
     def _walk_forward(pred_one_step):
         hist = y_train.values.copy()
         preds = []
@@ -1008,12 +1026,10 @@ def _champion_forecast_and_backtest(base_series: pd.Series,
         y_pred_test = _walk_forward(lambda h: tsb_forecast(h, alpha, beta, 1)[1][0])
 
     elif model == "RandomForest":
-        # params: "lags=1..k, n_estimators=200, max_depth=None"
         k = int(re.search(r"lags=1\.\.(\d+)", params).group(1))
         n_est = int(re.search(r"n_estimators=(\d+)", params).group(1))
         mdm = re.search(r"max_depth=(None|\d+)", params).group(1)
         max_depth = None if mdm == "None" else int(mdm)
-
         lags = list(range(1, k+1))
         df_sup = make_supervised_from_series(s_mdl, lags)
         X = df_sup.drop(columns=["y"]).values
@@ -1029,7 +1045,7 @@ def _champion_forecast_and_backtest(base_series: pd.Series,
         m2 = re.search(r"seasonal=\((\-?\d+),(\-?\d+),(\-?\d+),(\-?\d+)\)", params)
         if m1 and m2:
             p,d,q = map(int, m1.groups())
-            P,D,Q,_m = map(int, m2.groups())
+            P,D,Q,m = map(int, m2.groups())
             sar = SARIMAX(y_train, order=(p,d,q),
                           seasonal_order=(P,D,Q,seasonal_period),
                           enforce_stationarity=False, enforce_invertibility=False)
@@ -1047,12 +1063,13 @@ def _champion_forecast_and_backtest(base_series: pd.Series,
             y_true, y_pred = y_true_m, y_pred_test
         backtest_df = pd.DataFrame({"ds": ds_test, "y_true": y_true, "y_pred": y_pred})
 
-    # ---------- FORECAST FUTURO (refit/recursivo conforme o modelo) ----------
+    # -------- forecast futuro --------
     future_idx = pd.date_range(base_series.index[-1] + pd.offsets.MonthBegin(1),
                                periods=horizon, freq="MS")
 
     y_pred_future = None
     if model in ("Croston","SBA","TSB"):
+        # recursivo simples
         hist = s_mdl.values.copy()
         preds = []
         for _ in range(horizon):
@@ -1067,7 +1084,7 @@ def _champion_forecast_and_backtest(base_series: pd.Series,
         y_pred_future = np.array(preds, dtype=float)
 
     elif model == "RandomForest":
-        # re-treina em tudo e gera recursivo
+        # refit em tudo + geração recursiva
         lags = list(range(1, k+1))
         df_sup_all = make_supervised_from_series(s_mdl, lags)
         rf = RandomForestRegressor(n_estimators=n_est, random_state=RANDOM_STATE, max_depth=max_depth)
@@ -1103,7 +1120,31 @@ def _champion_forecast_and_backtest(base_series: pd.Series,
         forecast_df = pd.DataFrame({"ds": future_idx, "y": y_fut})
 
     return forecast_df, backtest_df
-    # ========= /PATCH =========
+
+# Executa e anexa nos attrs
+try:
+    forecast_df, backtest_df = _champion_forecast_and_backtest(
+        base_series=base_series,
+        horizon=int(horizon),
+        seasonal_period=int(seasonal_period),
+        champion_row=champion,
+        forward_transform=fwd_transform,
+        inverse_transform=inv_transform
+    )
+    df_out.attrs["champion"] = champion.to_dict()
+    df_out.attrs["forecast_df"] = forecast_df
+    df_out.attrs["forecast_horizon"] = int(horizon)
+    df_out.attrs["backtest"] = backtest_df
+    df_out.attrs["experiments_df"] = df_out.copy()
+    log(f"[OK] Previsão/backtest do campeão anexados (h={int(horizon)})")
+except Exception as e:
+    df_out.attrs["champion"] = champion.to_dict()
+    df_out.attrs["forecast_df"] = None
+    df_out.attrs["forecast_error"] = str(e)
+    df_out.attrs["backtest"] = None
+    df_out.attrs["experiments_df"] = df_out.copy()
+    log(f"[WARN] Não foi possível gerar forecast/backtest do campeão: {e}")
+# === /CAMPEÃO + FORECAST + BACKTEST ===
 
 
     # Seleção do CAMPEÃO segundo FPP3 (menor MAE; desempates RMSE, soma, simplicidade)
