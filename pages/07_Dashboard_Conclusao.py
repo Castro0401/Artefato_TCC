@@ -56,11 +56,14 @@ fcst_df = ss.get("forecast_df")              # df salvo na pág. 04 (ds,y)
 hist_df_norm = ss.get("ts_df_norm")          # upload normalizado (ds,y)
 mps_tbl_display = ss.get("mps_table")        # tabela do MPS (a de exibição)
 mps_detail = ss.get("mps_detail")            # detalhe do core (se você decidir guardar)
-exp_df = (
-    ss.get("experiments_df")
-    or ss.get("experiments_table")
-    or ss.get("pipeline_experiments")
-)
+# Recupera tabela de experimentos (forma robusta)
+exp_df = None
+for key in ["experiments_df", "experiments_table", "pipeline_experiments"]:
+    val = ss.get(key)
+    if isinstance(val, pd.DataFrame) and not val.empty:
+        exp_df = val
+        break
+
 
 tabs = st.tabs(["📊 Acurácia", "🧭 Vieses", "🏭 MPS & KPIs", "💡 Recomendações"])
 
