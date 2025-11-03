@@ -25,7 +25,7 @@ if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state
     st.stop()
 
 # =========================
-# DADOS BASE (apenas para rótulos e edição)
+# DADOS BASE
 # =========================
 fcst = st.session_state["forecast_df"][["ds", "y"]].copy()
 horizon = int(st.session_state["forecast_h"])
@@ -42,6 +42,7 @@ def fmt_mmyy(ts: pd.Timestamp) -> str:
 
 labels_raw: list[pd.Timestamp] = ds_ts.tolist()          # valores "reais"
 labels_str: list[str] = [fmt_mmyy(ts) for ts in ds_ts]    # rótulos para UI
+idx_by_label_str = {s: i for i, s in enumerate(labels_str)}
 
 st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} meses**.")
 
@@ -77,7 +78,7 @@ with c4:
 lt1, lt2, lt3, lt4 = st.columns(4, gap="small")
 with lt1:
     lead_time_default = st.number_input(
-        "Lead time (meses)", min_value=0, value=int(get("lead_time_default", 0)), step=1
+        "Lead time (meses)", min_value=0, value=int(get("lead_time_default", 1)), step=1
     )
 with lt2: st.write("")
 with lt3: st.write("")
@@ -109,12 +110,11 @@ with row[2]:
 # 3) CONGELAMENTO DE HORIZONTE (intervalo)
 # =========================
 st.subheader("3) Congelamento de horizonte (intervalo)")
-
 start_label_str = labels_str[0]
+
 freeze_on_default = bool(defaults.get("freeze_on", False))
 freeze_on = st.checkbox("Ativar congelamento", value=freeze_on_default)
 
-# tenta reaproveitar “fim” salvo
 _saved = defaults.get("frozen_range", (start_label_str, start_label_str))
 saved_end_str = _saved[1] if isinstance(_saved, (list, tuple)) and len(_saved) == 2 else start_label_str
 if saved_end_str not in labels_str:
@@ -144,10 +144,8 @@ else:
 # =========================
 st.subheader("4) Pedidos firmes — Em carteira")
 
-# inicia/recupera; mantemos ds “raw” como Timestamp; exibimos colunas com rótulos bonitos
 if "mps_firm_orders" in st.session_state:
     current_orders = st.session_state["mps_firm_orders"].copy()
-    # sincroniza com labels atuais (comparando pelo rótulo bonito)
     cur_labels_str = [fmt_mmyy(pd.to_datetime(x).to_period("M").to_timestamp())
                       for x in current_orders["ds"].tolist()]
     if cur_labels_str != labels_str:
@@ -155,7 +153,6 @@ if "mps_firm_orders" in st.session_state:
 else:
     current_orders = pd.DataFrame({"ds": labels_raw, "y": [0]*len(labels_raw)})
 
-# editor em linha única: colunas são strings "MÊS/ANO"
 orders_row_df = pd.DataFrame([current_orders["y"].tolist()], index=["Em carteira"], columns=labels_str)
 orders_row_df = st.data_editor(
     orders_row_df,
@@ -165,32 +162,92 @@ orders_row_df = st.data_editor(
     key="orders_row_inputs_mps",
 )
 orders_row_df = orders_row_df.fillna(0)
-
-# reconstrói df (ds original, y) preservando a ordem de labels_raw
 values = orders_row_df.loc["Em carteira"].astype(int).reindex(labels_str).tolist()
 orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 
 # =========================
-# 5) CUSTOS (apenas coleta; cálculos serão na página de conclusão)
+# 5) EPQ — Parâmetros de custos (nomenclatura da aula)
 # =========================
-st.subheader("5) Custos (apenas coleta — cálculos na conclusão)")
-c9, c10, c11, c12 = st.columns(4)
-with c9:
-    unit_cost = st.number_input("Custo de produzir (R$/un)", min_value=0.0, value=float(get("unit_cost", 1.0)), step=0.10)
-with c10:
-    order_cost = st.number_input("Custo por pedido (R$)", min_value=0.0, value=float(get("order_cost", 50.0)), step=10.0)
-with c11:
-    holding_rate = st.number_input("Custo de manter (% do valor/mês)", min_value=0.0, value=float(get("holding_rate", 1.5)), step=0.1)
-with c12:
-    shortage_cost = st.number_input("Custo de ruptura (R$/un não atendida)", min_value=0.0, value=float(get("shortage_cost", 0.0)), step=1.0)
+st.subheader("5) EPQ — Parâmetros de custos (nomenclatura da aula)")
 
-st.caption("Aqui você apenas informa os valores. Os **cálculos** (Custo de produzir, encomendar, manter, ruptura e total) serão feitos na **página de conclusão**.")
+# Base de tempo para os parâmetros (apenas coleta; conversões ocorrerão na conclusão)
+time_base = st.radio(
+    "Base de tempo dos parâmetros (para D, H e r):",
+    options=["por mês", "por ano"],
+    index=0 if get("time_base", "por mês") == "por mês" else 1,
+    horizontal=True,
+    help="Escolha como você está informando as taxas. A conversão, se necessária, será feita na página de conclusão."
+)
+
+cA, cD, cP = st.columns(3)
+with cA:
+    A = st.number_input(
+        "A — Custo fixo por setup/encomenda (R$)",
+        min_value=0.0, step=10.0, value=float(get("A", 50.0)),
+        help="Custo fixo cada vez que prepara a produção (setup) ou faz uma encomenda."
+    )
+with cD:
+    D = st.number_input(
+        "D — Taxa de demanda (unid/" + ("mês" if time_base=="por mês" else "ano") + ")",
+        min_value=0.0, step=1.0, value=float(get("D", 0.0)),
+        help="Demanda média estável na base de tempo escolhida."
+    )
+with cP:
+    p = st.number_input(
+        "p — Taxa de produção (unid/" + ("mês" if time_base=="por mês" else "ano") + ")",
+        min_value=0.0, step=1.0, value=float(get("p", 0.0)),
+        help="Capacidade de produção do item (deve ser p > D no EPQ)."
+    )
+
+st.markdown("**H — Custo de manter por unidade e por período**")
+h_mode = st.radio(
+    "Como deseja informar H?",
+    options=["Informar H diretamente", "Calcular H a partir de r e v"],
+    index=0 if get("h_mode", "Informar H diretamente") == "Informar H diretamente" else 1,
+    horizontal=True
+)
+
+colH1, colH2, colH3 = st.columns(3)
+if h_mode == "Informar H diretamente":
+    with colH1:
+        H = st.number_input(
+            "H — Custo de manter (R$ por unid/" + ("mês" if time_base=="por mês" else "ano") + ")",
+            min_value=0.0, step=1.0, value=float(get("H", 0.0)),
+            help="Custo de manter uma unidade em estoque por período (na base escolhida)."
+        )
+    r = get("r", None)
+    v = get("v", None)
+else:
+    with colH1:
+        r = st.number_input(
+            "r — Taxa de manutenção (R$/$ por " + ("mês" if time_base=="por mês" else "ano") + ")",
+            min_value=0.0, step=0.01, value=float(get("r", 0.20 if time_base=="por ano" else 0.02)),
+            help="Taxa de manutenção (por exemplo 0,20 R$/$/ano)."
+        )
+    with colH2:
+        v = st.number_input(
+            "v — Valor unitário do item (R$ por unid)",
+            min_value=0.0, step=1.0, value=float(get("v", 0.0)),
+            help="Usado com r para obter H = r·v."
+        )
+    H = None  # será calculado na página de conclusão
+
+# (opcional) Custo de falta / ruptura por unidade
+st.markdown("**π — Custo de falta (opcional)**")
+colPi, colBlank, colBlank2 = st.columns(3)
+with colPi:
+    pi_shortage = st.number_input(
+        "π — Custo de falta/ruptura (R$ por unidade não atendida)",
+        min_value=0.0, step=1.0, value=float(get("pi_shortage", 0.0)),
+        help="Opcional. Se informado, pode ser usado para analisar penalidade de ruptura."
+    )
 
 # =========================
-# 6) SALVAR OS INPUTS
+# SALVAR
 # =========================
 if st.button("Salvar inputs do MPS", type="primary"):
     st.session_state["mps_inputs"] = {
+        # Seções 1–3
         "item_name": item_name,
         "lot_policy_default": "FX" if lot_policy_default == "FX" else "L4L",
         "lot_size_default": int(lot_size_default),
@@ -199,17 +256,24 @@ if st.button("Salvar inputs do MPS", type="primary"):
         "auto_ss": bool(auto_ss),
         "ss_method": ss_method,
         "z_choice": z_choice,
-        "cv_pct": float(cv_pct) if ss_method == "CV (%)" else None,
-        "sigma_abs": float(sigma_abs) if ss_method != "CV (%)" else None,
+        "cv_pct": float(cv_pct) if 'cv_pct' in locals() and cv_pct is not None else None,
+        "sigma_abs": float(sigma_abs) if 'sigma_abs' in locals() and sigma_abs is not None else None,
         "freeze_on": bool(freeze_on),
         "frozen_range": tuple(frozen_range) if freeze_on else None,
-        # Custos (apenas armazenados)
-        "unit_cost": float(unit_cost),
-        "holding_rate": float(holding_rate),
-        "order_cost": float(order_cost),
-        "shortage_cost": float(shortage_cost),
-        # Metadados úteis
-        "labels_str": labels_str,
+
+        # Seção 4 — pedidos firmes
+        "firm_orders": orders_df.copy(),
+
+        # Seção 5 — EPQ (nomenclatura aula)
+        "time_base": time_base,     # "por mês" ou "por ano"
+        "A": float(A),
+        "D": float(D),
+        "p": float(p),
+        "h_mode": h_mode,           # controla como H será derivado na conclusão
+        "H": float(H) if H is not None else None,
+        "r": float(r) if r is not None else None,
+        "v": float(v) if v is not None else None,
+        "pi_shortage": float(pi_shortage),
     }
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
@@ -220,4 +284,4 @@ c_back, c_next = st.columns([1, 1], gap="large")
 with c_back:
     st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão")
 with c_next:
-    st.page_link("pages/06_MPS.py", label="➡️ Ir para Conclusão (usará estes inputs)")
+    st.page_link("pages/06_MPS.py", label="➡️ Ir para MPS (Plano Mestre de Produção)")
