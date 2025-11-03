@@ -296,134 +296,145 @@ with tabs[1]:
 # TAB 3 — MPS & KPIs (decisão + custos + ATP)
 # ======================================================
 # ======================================================
-# TAB 3 — MPS & KPIs (colunas lado a lado)
+# TAB 3 — MPS (apenas leitura de inputs + custos)
 # ======================================================
 with tabs[2]:
-    st.subheader("KPIs do MPS")
+    st.subheader("MPS — Custos e Resumo (somente leitura dos inputs)")
 
+    # --------- Guardas de sessão (inputs e tabela do MPS) ---------
+    mps_inputs = st.session_state.get("mps_inputs", {})
+    if not isinstance(mps_inputs, dict) or not mps_inputs:
+        st.info("Não encontrei os **inputs do MPS**. Preencha e salve na página **05_Inputs_MPS**.")
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para 05_Inputs_MPS (preencher custos)")
+        st.stop()
+
+    # Tabela calculada do MPS (já gerada na sua página 06_MPS)
+    mps_tbl_display = st.session_state.get("mps_tbl_display", None)
     if not isinstance(mps_tbl_display, pd.DataFrame) or mps_tbl_display.empty:
-        st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte.")
+        st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte aqui.")
         st.page_link("pages/06_MPS.py", label="📅 Ir para 06_MPS (Plano Mestre de Produção)")
-    else:
-        # -------------------------------
-        # Utilitários para ler linhas por período (apenas colunas de data)
-        # -------------------------------
-        date_cols, date_labels = [], []
-        for c in mps_tbl_display.columns:
-            ts = _to_ts(c)
-            if not pd.isna(ts):
-                date_cols.append(c)
-                date_labels.append(ts.strftime("%b/%y").title().replace(".", ""))
+        st.stop()
 
-        def _row(name):
-            if name in mps_tbl_display.index:
-                s = mps_tbl_display.loc[name, date_cols]
-                return pd.Series(pd.to_numeric(s, errors="coerce").astype(float).values,
-                                 index=pd.to_datetime([_to_ts(c) for c in date_cols]))
+    # --------- Lê custos informados na página de inputs (sem cálculos aqui além dos custos) ---------
+    unit_cost     = float(mps_inputs.get("unit_cost", 0.0))        # R$/un (Custo de produzir)
+    order_cost    = float(mps_inputs.get("order_cost", 0.0))       # R$ por pedido (Custo de encomendar)
+    holding_rate  = float(mps_inputs.get("holding_rate", 0.0))     # % ao mês (Custo de manter)
+    shortage_cost = float(mps_inputs.get("shortage_cost", 0.0))    # R$/un não atendida (Custo de ruptura)
+
+    # --------- Colunas lado a lado ---------
+    cL, cR = st.columns([1.6, 1.0], gap="large")
+
+    # ===== ESQUERDA: Tabela do MPS (apenas exibição) =====
+    with cL:
+        # Formata títulos de colunas para Mês/Ano (Se tiver colunas datetime-like)
+        def _to_ts(v):
+            try:
+                return pd.to_datetime(v, errors="coerce")
+            except Exception:
+                return pd.NaT
+
+        show_tbl = mps_tbl_display.copy()
+        new_cols = []
+        PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+        for c in show_tbl.columns:
+            ts = _to_ts(c)
+            if pd.isna(ts):
+                new_cols.append(str(c))
+            else:
+                mon = PT_MON[ts.month-1]; yy = ts.year % 100
+                new_cols.append(f"{mon}/{yy:02d}")
+        show_tbl.columns = new_cols
+
+        st.dataframe(show_tbl, use_container_width=True, height=360)
+
+    # ===== DIREITA: KPIs e Custos =====
+    with cR:
+        st.markdown("### Custos do plano (horizonte atual)")
+
+        # Helper seguro para números
+        def _safe(v, nd=0):
+            try:
+                if np.isnan(v): return "—"
+            except Exception:
+                pass
+            try:
+                return f"{float(v):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            except Exception:
+                return str(v)
+
+        # Linhas que podemos usar:
+        # - "Qtde. MPS" (quantidade produzida/lote liberado por mês)
+        # - "Estoque Proj." (estoque projetado ao final de cada mês)
+        # - "Ruptura" (se existir)
+        # - "ATP(cum)" (opcional, não usado em custos)
+        # Tudo é opcionalmente presente: tratamos ausências com 0.
+
+        # Extrai linhas de interesse com tolerância a nomes
+        def _find_row(df: pd.DataFrame, name_candidates: list[str]):
+            idx = df.index.astype(str).str.strip().str.lower()
+            for cand in name_candidates:
+                m = (idx == cand.strip().lower())
+                if m.any():
+                    return df.loc[idx[m].index[0]]
             return None
 
-        q_mps   = _row("Qtde. MPS")
-        estoque = _row("Estoque Proj.")
-        atp     = _row("ATP")
-        atp_cum = _row("ATP(cum)")
-        if atp is None and atp_cum is not None:
-            atp = atp_cum.diff().fillna(atp_cum)
+        row_qtde_mps  = _find_row(mps_tbl_display, ["Qtde. MPS", "Qtde MPS", "Quantidade MPS", "MPS Qty"])
+        row_estoque   = _find_row(mps_tbl_display, ["Estoque Proj.", "Estoque Projetado", "Estoque"])
+        row_ruptura   = _find_row(mps_tbl_display, ["Ruptura", "Falta", "Backlog", "Não atendido"])
 
-        # -------------------------------
-        # Parâmetros econômicos (pode mover para Inputs do MPS depois)
-        # -------------------------------
-        with st.expander("⚙️ Parâmetros econômicos (edite se necessário)", expanded=False):
-            cA, cB, cC, cD = st.columns(4)
-            unit_cost = cA.number_input("Custo unitário (R$)", min_value=0.0, value=float(st.session_state.get("mps_unit_cost", 1.0)), step=0.1)
-            hold_rate = cB.number_input("Custo de estoque (%/mês)", min_value=0.0, value=float(st.session_state.get("mps_hold_rate", 2.0)), step=0.1)
-            hold_abs  = cC.number_input("OU custo estoque (R$/unid·mês)", min_value=0.0, value=float(st.session_state.get("mps_hold_abs", 0.0)), step=0.1, help="Se > 0, ignora o percentual.")
-            setup_c   = cD.number_input("Custo de setup (R$/lote)", min_value=0.0, value=float(st.session_state.get("mps_setup", 0.0)), step=1.0)
-            stockout_c = st.number_input("Custo de falta (R$/unid)", min_value=0.0, value=float(st.session_state.get("mps_stockout", 10.0)), step=0.5)
+        # Quantidades consolidadas
+        total_prod = float(np.nansum(row_qtde_mps.values.astype(float))) if row_qtde_mps is not None else 0.0
+        order_count = int(np.nansum((row_qtde_mps.values.astype(float) > 0).astype(int))) if row_qtde_mps is not None else 0
+        estoque_mes = row_estoque.values.astype(float) if row_estoque is not None else np.zeros(len(mps_tbl_display.columns))
+        total_estoque = float(np.nansum(np.clip(estoque_mes, 0, None)))  # só positivos
+        total_ruptura = float(np.nansum(np.clip(row_ruptura.values.astype(float), 0, None))) if row_ruptura is not None else 0.0
+        estoque_final = float(estoque_mes[-1]) if estoque_mes.size else np.nan
 
-        st.session_state.update(dict(
-            mps_unit_cost=unit_cost, mps_hold_rate=hold_rate,
-            mps_hold_abs=hold_abs, mps_setup=setup_c, mps_stockout=stockout_c
-        ))
+        # Cálculo dos custos (interpretações simples e explícitas)
+        # 1) Produzir: Σ(Qtde. MPS) × custo unitário
+        cost_produzir = total_prod * unit_cost
 
-        # -------------------------------
-        # KPIs de custo e nível
-        # -------------------------------
-        prod_cost = float(np.nansum(np.maximum(q_mps.values, 0)) * unit_cost) if q_mps is not None else np.nan
-        per_unit_hold = (hold_abs if hold_abs > 0 else (unit_cost * (hold_rate / 100.0)))
-        hold_cost = float(np.nansum(np.maximum(estoque.values, 0)) * per_unit_hold) if estoque is not None else np.nan
-        if estoque is not None:
-            faltas_unid = float(np.nansum(np.abs(np.minimum(estoque.values, 0))))
-        else:
-            faltas_unid = np.nan
-        stockout_cost = faltas_unid * stockout_c if np.isfinite(faltas_unid) else np.nan
-        setups = int(np.nansum((q_mps.values > 0).astype(int))) if q_mps is not None else np.nan
-        setup_cost = setups * setup_c if np.isfinite(setups) else np.nan
-        total_cost = np.nansum([x for x in [prod_cost, hold_cost, stockout_cost, setup_cost] if np.isfinite(x)])
+        # 2) Encomendar: nº de meses com pedido × custo por pedido
+        cost_encomendar = order_count * order_cost
 
-        estoque_final = int(estoque.iloc[-1]) if estoque is not None and len(estoque) else np.nan
-        rupturas = int(np.nansum((estoque.values < 0).astype(int))) if estoque is not None else np.nan
+        # 3) Manter: Σ(Estoque Projetado do mês) × custo unitário × (holding_rate/100)
+        cost_manter = total_estoque * unit_cost * (holding_rate / 100.0)
 
-        st.markdown("### Resumo econômico e operacional")
-        r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns(5)
-        with r1c1: _kpi("Custo produção (R$)", _safe_num(prod_cost, 0), "∑ Qtde. MPS × custo unid.")
-        with r1c2: _kpi("Custo estoque (R$)", _safe_num(hold_cost, 0), "∑ estoque+ × custo unid·mês")
-        with r1c3: _kpi("Custo falta (R$)", _safe_num(stockout_cost, 0), "Unid. em falta × custo")
-        with r1c4: _kpi("Custo setup (R$)", _safe_num(setup_cost, 0), "Períodos com produção × setup")
-        with r1c5: _kpi("Custo total (R$)", _safe_num(total_cost, 0), "Soma dos custos")
+        # 4) Ruptura: Σ(Ruptura) × custo de ruptura (se linha não existir, considera 0)
+        cost_ruptura = total_ruptura * shortage_cost
 
-        r2c1, r2c2, r2sp = st.columns([1,1,3])
-        with r2c1: _kpi("Estoque final", _safe_num(estoque_final, 0))
-        with r2c2: _kpi("Períodos com ruptura", _safe_num(rupturas, 0))
+        # Total relevante
+        cost_total = cost_produzir + cost_encomendar + cost_manter + cost_ruptura
 
-        # -------------------------------
-        # Explorador de ATP (com KPIs em linha)
-        # -------------------------------
-        st.markdown("### Explorador de ATP — demandas extras por mês")
-        if atp is None:
-            st.info("Não encontrei a linha **ATP** (ou **ATP(cum)**) no MPS para calcular a folga mensal.")
-        else:
-            extra = st.slider("Demanda extra (unidades/mês)", min_value=0, max_value=int(max(100, np.nanmax(atp.values))), value=0, step=1)
-            df_atp = pd.DataFrame({
-                "ds": atp.index,
-                "ATP": atp.values,
-                "Atende_extra?": (atp.values >= extra) if extra > 0 else np.ones_like(atp.values, dtype=bool),
-            })
-            df_atp["Sobra"]   = np.where(df_atp["ATP"] - extra >= 0, df_atp["ATP"] - extra, 0)
-            df_atp["Déficit"] = np.where(df_atp["ATP"] - extra < 0,  -(df_atp["ATP"] - extra), 0)
+        # KPIs principais (duas linhas lado a lado)
+        k1, k2 = st.columns(2)
+        with k1:
+            st.metric("Estoque final (último mês)", _safe(estoque_final, 0))
+            st.metric("Total produzido (Σ Qtde. MPS)", _safe(total_prod, 0))
+        with k2:
+            st.metric("Meses com pedido (contagem)", f"{order_count:d}")
+            st.metric("Ruptura (Σ unidades)", _safe(total_ruptura, 0))
 
-            kA, kB, kC = st.columns(3)
-            with kA: _kpi("Meses que atendem 100%", _safe_num(int(df_atp["Atende_extra?"].sum()), 0))
-            with kB: _kpi("Sobra total (unid)", _safe_num(float(df_atp["Sobra"].sum()), 0))
-            with kC: _kpi("Déficit total (unid)", _safe_num(float(df_atp["Déficit"].sum()), 0))
+        st.markdown("### Decomposição de custos")
+        cA, cB = st.columns(2)
+        with cA:
+            st.metric("Custo de produzir (R$)", _safe(cost_produzir, 2))
+            st.metric("Custo de manter (R$)", _safe(cost_manter, 2))
+        with cB:
+            st.metric("Custo de encomendar (R$)", _safe(cost_encomendar, 2))
+            st.metric("Custo de ruptura (R$)", _safe(cost_ruptura, 2))
 
-            import altair as alt
-            ch_atp = (
-                alt.Chart(df_atp)
-                .mark_bar(color="#1e3a8a")  # azul escuro
-                .encode(
-                    x=alt.X("ds:T", title="Mês"),
-                    y=alt.Y("ATP:Q", title="ATP (unidades)"),
-                    tooltip=[
-                        alt.Tooltip("ds:T", title="Período"),
-                        alt.Tooltip("ATP:Q", title="ATP", format=",.0f"),
-                        alt.Tooltip("Sobra:Q", format=",.0f"),
-                        alt.Tooltip("Déficit:Q", format=",.0f"),
-                        alt.Tooltip("Atende_extra?:N", title="Atende extra?")
-                    ]
-                )
-                .properties(height=260, width="container")
-                .interactive()
-            )
-            st.altair_chart(ch_atp, use_container_width=True)
+        st.markdown("#### Custo relevante total")
+        st.metric("Total (R$)", _safe(cost_total, 2))
 
-            with st.expander("Ver detalhes por mês", expanded=False):
-                show = df_atp.copy()
-                show["Mês"] = show["ds"].dt.strftime("%b/%y").str.title()
-                st.dataframe(
-                    show[["Mês","ATP","Sobra","Déficit","Atende_extra?"]]
-                    .rename(columns={"Atende_extra?":"Atende?"}),
-                    use_container_width=True, height=240
-                )
+        st.caption(
+            "Notas: "
+            "• **Custo de produzir** = Σ(Qtde. MPS) × custo unitário. "
+            "• **Custo de encomendar** = (nº de meses com pedido) × custo por pedido. "
+            "• **Custo de manter** = Σ(Estoque do mês) × custo unitário × taxa de manutenção mensal. "
+            "• **Custo de ruptura** = Σ(Ruptura) × custo por unidade não atendida. "
+            "Se a linha **Ruptura** não existir na sua tabela, assume-se 0."
+        )
 
 
 # ======================================================

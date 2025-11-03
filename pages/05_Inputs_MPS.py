@@ -25,7 +25,7 @@ if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state
     st.stop()
 
 # =========================
-# DADOS BASE
+# DADOS BASE (apenas para rótulos e edição)
 # =========================
 fcst = st.session_state["forecast_df"][["ds", "y"]].copy()
 horizon = int(st.session_state["forecast_h"])
@@ -42,7 +42,6 @@ def fmt_mmyy(ts: pd.Timestamp) -> str:
 
 labels_raw: list[pd.Timestamp] = ds_ts.tolist()          # valores "reais"
 labels_str: list[str] = [fmt_mmyy(ts) for ts in ds_ts]    # rótulos para UI
-idx_by_label_str = {s: i for i, s in enumerate(labels_str)}
 
 st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} meses**.")
 
@@ -78,9 +77,8 @@ with c4:
 lt1, lt2, lt3, lt4 = st.columns(4, gap="small")
 with lt1:
     lead_time_default = st.number_input(
-        "Lead time (meses)", min_value=0, value=int(get("lead_time_default", 1)), step=1
+        "Lead time (meses)", min_value=0, value=int(get("lead_time_default", 0)), step=1
     )
-# as três colunas seguintes ficam vazias para manter o alinhamento
 with lt2: st.write("")
 with lt3: st.write("")
 with lt4: st.write("")
@@ -110,16 +108,13 @@ with row[2]:
 # =========================
 # 3) CONGELAMENTO DE HORIZONTE (intervalo)
 # =========================
-
 st.subheader("3) Congelamento de horizonte (intervalo)")
 
 start_label_str = labels_str[0]
-
-# novo: chave liga/desliga
 freeze_on_default = bool(defaults.get("freeze_on", False))
 freeze_on = st.checkbox("Ativar congelamento", value=freeze_on_default)
 
-# tenta reaproveitar “fim” salvo (compatível com formato antigo)
+# tenta reaproveitar “fim” salvo
 _saved = defaults.get("frozen_range", (start_label_str, start_label_str))
 saved_end_str = _saved[1] if isinstance(_saved, (list, tuple)) and len(_saved) == 2 else start_label_str
 if saved_end_str not in labels_str:
@@ -143,7 +138,6 @@ if freeze_on:
 else:
     frozen_range = None
     st.caption("Período congelado: **sem congelamento**")
-
 
 # =========================
 # 4) PEDIDOS EM CARTEIRA
@@ -177,23 +171,24 @@ values = orders_row_df.loc["Em carteira"].astype(int).reindex(labels_str).tolist
 orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 
 # =========================
-# 5) CUSTOS (opcional para páginas futuras)
+# 5) CUSTOS (apenas coleta; cálculos serão na página de conclusão)
 # =========================
-st.subheader("5) Custos")
+st.subheader("5) Custos (apenas coleta — cálculos na conclusão)")
 c9, c10, c11, c12 = st.columns(4)
 with c9:
-    unit_cost = st.number_input("Custo unitário (R$)", min_value=0.0, value=float(get("unit_cost", 0.0)), step=10.0)
+    unit_cost = st.number_input("Custo de produzir (R$/un)", min_value=0.0, value=float(get("unit_cost", 1.0)), step=0.10)
 with c10:
-    holding_rate = st.number_input("Taxa de manutenção (%/mês)", min_value=0.0, value=float(get("holding_rate", 1.5)), step=0.1)
-with c11:
     order_cost = st.number_input("Custo por pedido (R$)", min_value=0.0, value=float(get("order_cost", 50.0)), step=10.0)
+with c11:
+    holding_rate = st.number_input("Custo de manter (% do valor/mês)", min_value=0.0, value=float(get("holding_rate", 1.5)), step=0.1)
 with c12:
-    shortage_cost = st.number_input("Custo de falta (R$/un)", min_value=0.0, value=float(get("shortage_cost", 0.0)), step=10.0)
+    shortage_cost = st.number_input("Custo de ruptura (R$/un não atendida)", min_value=0.0, value=float(get("shortage_cost", 0.0)), step=1.0)
+
+st.caption("Aqui você apenas informa os valores. Os **cálculos** (Custo de produzir, encomendar, manter, ruptura e total) serão feitos na **página de conclusão**.")
 
 # =========================
-# SALVAR
+# 6) SALVAR OS INPUTS
 # =========================
-
 if st.button("Salvar inputs do MPS", type="primary"):
     st.session_state["mps_inputs"] = {
         "item_name": item_name,
@@ -204,25 +199,25 @@ if st.button("Salvar inputs do MPS", type="primary"):
         "auto_ss": bool(auto_ss),
         "ss_method": ss_method,
         "z_choice": z_choice,
-        "cv_pct": float(cv_pct) if cv_pct is not None else None,
-        "sigma_abs": float(sigma_abs) if sigma_abs is not None else None,
-        "freeze_on": bool(freeze_on),                                 # 👈 novo
-        "frozen_range": tuple(frozen_range) if freeze_on else None,   # 👈 novo
+        "cv_pct": float(cv_pct) if ss_method == "CV (%)" else None,
+        "sigma_abs": float(sigma_abs) if ss_method != "CV (%)" else None,
+        "freeze_on": bool(freeze_on),
+        "frozen_range": tuple(frozen_range) if freeze_on else None,
+        # Custos (apenas armazenados)
         "unit_cost": float(unit_cost),
         "holding_rate": float(holding_rate),
         "order_cost": float(order_cost),
         "shortage_cost": float(shortage_cost),
+        # Metadados úteis
+        "labels_str": labels_str,
     }
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
 
-
 # -------- Navegação --------
 st.divider()
-
-# Linha 1: botões de navegação lado a lado (esquerda = voltar; direita = avançar)
 c_back, c_next = st.columns([1, 1], gap="large")
 with c_back:
     st.page_link("pages/04_Previsao.py", label="⬅️ Retornar para Previsão")
 with c_next:
-    st.page_link("pages/06_MPS.py", label="➡️ Ir para MPS (Plano Mestre de Produção)")
+    st.page_link("pages/06_MPS.py", label="➡️ Ir para Conclusão (usará estes inputs)")
