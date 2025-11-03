@@ -189,56 +189,96 @@ with tabs[0]:
         st.page_link("pages/04_Previsao.py", label="🛠️ Ajustar Previsão", icon="🧪")
 
 # ======================================================
-# TAB 2 — VIESES (com fallback)
+# TAB 2 — VIESES (com conclusão automática)
 # ======================================================
 with tabs[1]:
     st.subheader("Diagnóstico de vieses da previsão")
 
-    # Tentamos montar uma base com y_true x y_pred.
-    # 1) Se o pipeline guardou 'backtest' em attrs:
+    # 1) Tenta recuperar um backtest com ds, y_true, y_pred
     bt = None
     if res is not None and hasattr(res, "attrs"):
-        # procura formatos comuns
         for k in ["backtest", "oos_eval", "cv_last", "val_df", "fitted_df"]:
             obj = res.attrs.get(k)
-            if isinstance(obj, pd.DataFrame) and {"ds","y_true","y_pred"}.issubset(obj.columns):
-                bt = obj[["ds","y_true","y_pred"]].copy()
-                bt["ds"] = pd.to_datetime(bt["ds"])
+            if isinstance(obj, pd.DataFrame) and {"ds", "y_true", "y_pred"}.issubset(obj.columns):
+                bt = obj[["ds", "y_true", "y_pred"]].copy()
+                bt["ds"] = pd.to_datetime(bt["ds"], errors="coerce")
+                bt = bt.dropna(subset=["ds"]).sort_values("ds")
                 break
 
-    # 2) Caso não tenha backtest, não dá pra avaliar viés de maneira honesta.
-    if bt is None:
+    # 2) Sem backtest, não há diagnóstico honesto de viés
+    if bt is None or bt.empty:
         st.info(
             "Não encontrei um **backtest** com `y_true` e `y_pred` no resultado da previsão. "
             "Sem esses dados não é possível calcular vieses históricos. "
             "Se quiser, podemos adicionar cross-validation ao pipeline para habilitar essa aba."
         )
     else:
-        bt = bt.sort_values("ds")
+        # Métricas de viés
         bt["erro"] = bt["y_pred"] - bt["y_true"]
         bias_abs = float(bt["erro"].mean()) if bt["erro"].notna().any() else np.nan
-        pct = np.where(bt["y_true"] != 0, bt["erro"] / bt["y_true"], np.nan)
-        bias_pct = float(np.nanmean(pct)) * 100.0
 
-        c1, c2 = st.columns(2)
-        _kpi("Viés (nível)", _safe_num(bias_abs), "média de (previsto − real)")
-        _kpi("Viés (%)", _safe_num(bias_pct), "média de (previsto − real)/real × 100")
+        # viés relativo (%): média de (erro/real) ignorando reais = 0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pct_vec = np.where(bt["y_true"] != 0, bt["erro"] / bt["y_true"], np.nan)
+        bias_pct = float(np.nanmean(pct_vec) * 100.0)
+
+        # MAE do backtest para escalar a conclusão
+        mae_bt = float(np.nanmean(np.abs(bt["erro"]))) if bt["erro"].notna().any() else np.nan
+
+        c1, c2, c3 = st.columns(3)
+        _kpi("Viés (nível)", _safe_num(bias_abs), "Média de (previsto − real)")
+        _kpi("Viés (%)", _safe_num(bias_pct), "Média de (previsto − real)/real × 100")
+        _kpi("MAE (backtest)", _safe_num(mae_bt), "Média do |erro| no período de teste")
 
         st.caption(
             "Interpretação: valores **positivos** indicam **superestimação**; negativos, **subestimação**. "
             "Quanto mais próximo de 0, menor o viés."
         )
 
-        # Curva dos erros
+        # 3) Gráfico do erro (azul escuro) + linha de referência zero
         import altair as alt
+        linha_zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9ca3af").encode(y="y:Q")
         ch = (
-            alt.Chart(bt[["ds","erro"]])
-            .mark_line(color="#525252")
-            .encode(x="ds:T", y="erro:Q", tooltip=["ds:T", alt.Tooltip("erro:Q", format=",.2f")])
-            .properties(height=280, width="container")
+            alt.Chart(bt[["ds", "erro"]])
+            .mark_line(color="#1e3a8a")
+            .encode(
+                x=alt.X("ds:T", title="Período"),
+                y=alt.Y("erro:Q", title="Erro (previsto − real)"),
+                tooltip=[
+                    alt.Tooltip("ds:T", title="Período"),
+                    alt.Tooltip("erro:Q", title="Erro", format=",.2f"),
+                ],
+            )
+            .properties(height=300, width="container")
             .interactive()
         )
-        st.altair_chart(ch, use_container_width=True)
+        st.altair_chart(linha_zero + ch, use_container_width=True)
+
+        # 4) Conclusão automática (baseada no viés vs. MAE)
+        conclusao = ""
+        if np.isfinite(bias_abs) and np.isfinite(mae_bt) and mae_bt > 0:
+            # limiar: 5% do MAE → sem viés material; senão aponta direção
+            if abs(bias_abs) < 0.05 * mae_bt:
+                conclusao = "✅ **Sem viés sistemático relevante.** Os erros oscilam ao redor de zero."
+            elif bias_abs > 0:
+                conclusao = "⚠️ **Viés positivo (superestimação).** Em média o modelo prevê acima do realizado."
+            else:
+                conclusao = "⚠️ **Viés negativo (subestimação).** Em média o modelo prevê abaixo do realizado."
+        else:
+            conclusao = "ℹ️ **Não foi possível calcular uma conclusão automática** (dados insuficientes)."
+
+        st.markdown(f"**Conclusão automática:** {conclusao}")
+
+        # 5) Explicação fixa e objetiva
+        st.markdown(
+            """
+**Como ler o gráfico acima:**  
+- A linha mostra o **erro** em cada período (previsto − real).  
+- **Acima de 0** → o modelo **superestimou**; **abaixo de 0** → **subestimou**.  
+- Quando os pontos ficam próximos de 0 e alternam entre positivo/negativo, **não há viés sistemático**.  
+- Deslocamentos persistentes para cima/baixo sugerem **viés** e pedem recalibração do modelo (parâmetros, sazonalidade ou tendência).
+            """
+        )
 
 # ======================================================
 # TAB 3 — MPS & KPIs (robusto)
