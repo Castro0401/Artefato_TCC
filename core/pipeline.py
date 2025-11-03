@@ -968,6 +968,87 @@ def run_full_pipeline(
     log(f"Modelo: {champion['model']} | Hiperparâmetros: {champion['model_params']}")
     log(f"MAE={champion['MAE']:.6g} | RMSE={champion['RMSE']:.6g} | MAPE={champion['MAPE']:.6g} | sMAPE={champion['sMAPE']:.6g}")
 
+        # =========================================================
+    # GERA A PREVISÃO DO MODELO CAMPEÃO (forecast_df)
+    # =========================================================
+    try:
+        modelo = str(champion["model"])
+        preprocess = str(champion["preprocess"]).lower()
+        params = str(champion["model_params"])
+
+        # --- tratamento de pré-processamento log
+        if preprocess == "log":
+            fwd, inv, _ = make_log_transformers(base_series)
+            s_fit = pd.Series(fwd(base_series).values, index=base_series.index)
+            inv_func = inv
+        else:
+            s_fit = base_series.copy()
+            inv_func = None
+
+        # --- SARIMAX
+        if modelo == "SARIMAX":
+            import re
+            o = re.search(r"order=\((\d+),(\d+),(\d+)\)", params)
+            s = re.search(r"seasonal=\((\d+),(\d+),(\d+),(\d+)\)", params)
+            if o:
+                p,d,q = map(int, o.groups())
+                if s: P,D,Q,m = map(int, s.groups())
+                else: P,D,Q,m = 0,0,0, seasonal_period
+                sarima = SARIMAX(s_fit, order=(p,d,q), seasonal_order=(P,D,Q,m),
+                                 enforce_stationarity=False, enforce_invertibility=False)
+                res = sarima.fit(disp=False)
+                yhat = res.get_forecast(steps=horizon).predicted_mean.values
+                if inv_func:
+                    yhat = inv_func(yhat)
+                forecast_df = pd.DataFrame({
+                    "ds": pd.date_range(s_fit.index[-1] + pd.offsets.MonthBegin(1), periods=horizon, freq="MS"),
+                    "y": yhat
+                })
+            else:
+                forecast_df = None
+
+        # --- RandomForest
+        elif modelo == "RandomForest":
+            import re
+            k = int(re.search(r"lags=1\.\.(\d+)", params).group(1)) if "lags" in params else 6
+            df_sup = make_supervised_from_series(s_fit, list(range(1, k+1)))
+            X = df_sup.drop(columns=["y"]).values
+            y = df_sup["y"].values
+            rf = RandomForestRegressor(random_state=RANDOM_STATE)
+            rf.fit(X, y)
+            hist = list(s_fit.values)
+            preds = []
+            for _ in range(horizon):
+                row = {f"lag_{i}": hist[-i] for i in range(1, k+1)}
+                for col in df_sup.columns:
+                    if col.startswith("month_"):
+                        row[col] = 0
+                X_new = np.array([[row.get(c, 0) for c in df_sup.drop(columns=["y"]).columns]])
+                y_pred = float(rf.predict(X_new))
+                preds.append(y_pred)
+                hist.append(y_pred)
+            yhat = np.array(preds)
+            if inv_func:
+                yhat = inv_func(yhat)
+            forecast_df = pd.DataFrame({
+                "ds": pd.date_range(s_fit.index[-1] + pd.offsets.MonthBegin(1), periods=horizon, freq="MS"),
+                "y": yhat
+            })
+
+        else:
+            forecast_df = None
+
+        # Salva dentro dos atributos do DataFrame final
+        if forecast_df is not None:
+            df_out.attrs["forecast_df"] = forecast_df
+            log(f"[OK] Previsão do modelo campeão ({modelo}) gerada e anexada.")
+        else:
+            log("[WARN] Não foi possível gerar forecast_df para o modelo campeão.")
+
+    except Exception as e:
+        log(f"[ERRO] Falha ao gerar previsão do campeão: {e}")
+
+
     # Ordenação leve para visualização (não afeta o campeão já escolhido)
     df_out = df_out.sort_values(by=["preprocess","model","MAE","RMSE"]).reset_index(drop=True)
 
