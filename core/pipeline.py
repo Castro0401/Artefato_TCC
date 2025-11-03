@@ -14,7 +14,7 @@ Saídas:
 - os prints via `log()` podem ser encaminhados para `st.status()` / `st.write()`
 - o DataFrame final pode ser exibido com `st.dataframe()` e disponibilizado para download
 """
-
+import re
 import os, time, warnings, itertools, sys, datetime as dt
 from dataclasses import dataclass
 from typing import Tuple, Dict, List, Optional, Callable, Union
@@ -961,6 +961,151 @@ def run_full_pipeline(
 
     df_out = pd.DataFrame(rows)
 
+    # ========= PATCH: forecast + backtest do campeão =========
+def _champion_forecast_and_backtest(base_series: pd.Series,
+                                    horizon: int,
+                                    seasonal_period: int,
+                                    champion_row: pd.Series,
+                                    forward_transform=None,
+                                    inverse_transform=None):
+    """
+    Retorna (forecast_df, backtest_df) do campeão.
+      - forecast_df: ds,y (previsão futura em escala original)
+      - backtest_df: ds,y_true,y_pred (holdout dos últimos `horizon` meses)
+    """
+    s_mdl = forward_transform(base_series) if forward_transform else base_series
+    s_mdl = pd.Series(np.asarray(s_mdl, dtype=float), index=base_series.index)
+
+    y_train = s_mdl.iloc[:-horizon]
+    y_test  = s_mdl.iloc[-horizon:]
+    ds_test = base_series.index[-horizon:]
+
+    model = str(champion_row["model"])
+    params = str(champion_row["model_params"])
+
+    # ---------- BACKTEST (one-step, walk-forward quando aplicável) ----------
+    def _walk_forward(pred_one_step):
+        hist = y_train.values.copy()
+        preds = []
+        for i in range(horizon):
+            preds.append(float(pred_one_step(hist)))
+            hist = np.append(hist, y_test.values[i])
+        return np.array(preds, dtype=float)
+
+    y_pred_test = None
+
+    if model == "Croston":
+        alpha = float(params.split("alpha=")[1])
+        y_pred_test = _walk_forward(lambda h: croston_forecast(h, alpha, 1)[1][0])
+
+    elif model == "SBA":
+        alpha = float(params.split("alpha=")[1])
+        y_pred_test = _walk_forward(lambda h: sba_forecast(h, alpha, 1)[1][0])
+
+    elif model == "TSB":
+        toks = dict(x.strip().split("=") for x in params.replace(" ", "").split(","))
+        alpha, beta = float(toks["alpha"]), float(toks["beta"])
+        y_pred_test = _walk_forward(lambda h: tsb_forecast(h, alpha, beta, 1)[1][0])
+
+    elif model == "RandomForest":
+        # params: "lags=1..k, n_estimators=200, max_depth=None"
+        k = int(re.search(r"lags=1\.\.(\d+)", params).group(1))
+        n_est = int(re.search(r"n_estimators=(\d+)", params).group(1))
+        mdm = re.search(r"max_depth=(None|\d+)", params).group(1)
+        max_depth = None if mdm == "None" else int(mdm)
+
+        lags = list(range(1, k+1))
+        df_sup = make_supervised_from_series(s_mdl, lags)
+        X = df_sup.drop(columns=["y"]).values
+        y = df_sup["y"].values
+        X_train, X_test = X[:-horizon], X[-horizon:]
+        y_train_rf, _ = y[:-horizon], y[-horizon:]
+        rf = RandomForestRegressor(n_estimators=n_est, random_state=RANDOM_STATE, max_depth=max_depth)
+        rf.fit(X_train, y_train_rf)
+        y_pred_test = rf.predict(X_test).astype(float)
+
+    elif model == "SARIMAX":
+        m1 = re.search(r"order=\((\-?\d+),(\-?\d+),(\-?\d+)\)", params)
+        m2 = re.search(r"seasonal=\((\-?\d+),(\-?\d+),(\-?\d+),(\-?\d+)\)", params)
+        if m1 and m2:
+            p,d,q = map(int, m1.groups())
+            P,D,Q,_m = map(int, m2.groups())
+            sar = SARIMAX(y_train, order=(p,d,q),
+                          seasonal_order=(P,D,Q,seasonal_period),
+                          enforce_stationarity=False, enforce_invertibility=False)
+            res = sar.fit(disp=False)
+            y_pred_test = res.get_forecast(steps=horizon).predicted_mean.values.astype(float)
+
+    if y_pred_test is None:
+        backtest_df = pd.DataFrame(columns=["ds","y_true","y_pred"])
+    else:
+        y_true_m = y_test.values
+        if inverse_transform:
+            y_true = inverse_transform(y_true_m)
+            y_pred = inverse_transform(y_pred_test)
+        else:
+            y_true, y_pred = y_true_m, y_pred_test
+        backtest_df = pd.DataFrame({"ds": ds_test, "y_true": y_true, "y_pred": y_pred})
+
+    # ---------- FORECAST FUTURO (refit/recursivo conforme o modelo) ----------
+    future_idx = pd.date_range(base_series.index[-1] + pd.offsets.MonthBegin(1),
+                               periods=horizon, freq="MS")
+
+    y_pred_future = None
+    if model in ("Croston","SBA","TSB"):
+        hist = s_mdl.values.copy()
+        preds = []
+        for _ in range(horizon):
+            if model == "Croston":
+                val = croston_forecast(hist, alpha, 1)[1][0]
+            elif model == "SBA":
+                val = sba_forecast(hist, alpha, 1)[1][0]
+            else:
+                val = tsb_forecast(hist, alpha, beta, 1)[1][0]
+            preds.append(val)
+            hist = np.append(hist, val)
+        y_pred_future = np.array(preds, dtype=float)
+
+    elif model == "RandomForest":
+        # re-treina em tudo e gera recursivo
+        lags = list(range(1, k+1))
+        df_sup_all = make_supervised_from_series(s_mdl, lags)
+        rf = RandomForestRegressor(n_estimators=n_est, random_state=RANDOM_STATE, max_depth=max_depth)
+        rf.fit(df_sup_all.drop(columns=["y"]).values, df_sup_all["y"].values)
+
+        hist = s_mdl.copy()
+        preds = []
+        for _ in range(horizon):
+            row = {"y": np.nan}
+            for L in lags: row[f"lag_{L}"] = hist.iloc[-L]
+            row = pd.DataFrame([row])
+            next_month = (hist.index[-1] + pd.offsets.MonthBegin(1)).month
+            row["month"] = next_month
+            row = pd.get_dummies(row, columns=["month"], drop_first=True)
+            X_cols = df_sup_all.drop(columns=["y"]).columns
+            row = row.reindex(columns=X_cols, fill_value=0)
+            val = float(rf.predict(row.values)[0])
+            preds.append(val)
+            hist = pd.concat([hist, pd.Series([val], index=[hist.index[-1] + pd.offsets.MonthBegin(1)])])
+        y_pred_future = np.array(preds, dtype=float)
+
+    elif model == "SARIMAX" and m1 and m2:
+        sar_all = SARIMAX(s_mdl, order=(p,d,q),
+                          seasonal_order=(P,D,Q,seasonal_period),
+                          enforce_stationarity=False, enforce_invertibility=False)
+        res_all = sar_all.fit(disp=False)
+        y_pred_future = res_all.get_forecast(steps=horizon).predicted_mean.values.astype(float)
+
+    if y_pred_future is None:
+        forecast_df = pd.DataFrame(columns=["ds","y"])
+    else:
+        y_fut = inverse_transform(y_pred_future) if inverse_transform else y_pred_future
+        forecast_df = pd.DataFrame({"ds": future_idx, "y": y_fut})
+
+    return forecast_df, backtest_df
+    # ========= /PATCH =========
+
+
     # Seleção do CAMPEÃO segundo FPP3 (menor MAE; desempates RMSE, soma, simplicidade)
     champion = select_champion(df_out)
     log("===== CAMPEÃO (critério: menor MAE; desempates por RMSE/soma/simplicidade) =====")
@@ -968,86 +1113,30 @@ def run_full_pipeline(
     log(f"Modelo: {champion['model']} | Hiperparâmetros: {champion['model_params']}")
     log(f"MAE={champion['MAE']:.6g} | RMSE={champion['RMSE']:.6g} | MAPE={champion['MAPE']:.6g} | sMAPE={champion['sMAPE']:.6g}")
 
-        # =========================================================
-    # GERA A PREVISÃO DO MODELO CAMPEÃO (forecast_df)
-    # =========================================================
-    try:
-        modelo = str(champion["model"])
-        preprocess = str(champion["preprocess"]).lower()
-        params = str(champion["model_params"])
+    # ========= PATCH: gerar forecast_df e backtest e anexar nas attrs =========
+    # seleciona transform conforme preprocess do campeão
+    prep = str(champion.get("preprocess", "original")).lower()
+    fwd, inv = (None, None)
+    if prep.startswith("log"):
+        # reconstroi transformadores (epsilon/shift) — suficiente para reverter a escala
+        fwd, inv, _ = _log_fwd_inv_from_params(base_series, str(champion.get("preprocess_params", "")))
 
-        # --- tratamento de pré-processamento log
-        if preprocess == "log":
-            fwd, inv, _ = make_log_transformers(base_series)
-            s_fit = pd.Series(fwd(base_series).values, index=base_series.index)
-            inv_func = inv
-        else:
-            s_fit = base_series.copy()
-            inv_func = None
 
-        # --- SARIMAX
-        if modelo == "SARIMAX":
-            import re
-            o = re.search(r"order=\((\d+),(\d+),(\d+)\)", params)
-            s = re.search(r"seasonal=\((\d+),(\d+),(\d+),(\d+)\)", params)
-            if o:
-                p,d,q = map(int, o.groups())
-                if s: P,D,Q,m = map(int, s.groups())
-                else: P,D,Q,m = 0,0,0, seasonal_period
-                sarima = SARIMAX(s_fit, order=(p,d,q), seasonal_order=(P,D,Q,m),
-                                 enforce_stationarity=False, enforce_invertibility=False)
-                res = sarima.fit(disp=False)
-                yhat = res.get_forecast(steps=horizon).predicted_mean.values
-                if inv_func:
-                    yhat = inv_func(yhat)
-                forecast_df = pd.DataFrame({
-                    "ds": pd.date_range(s_fit.index[-1] + pd.offsets.MonthBegin(1), periods=horizon, freq="MS"),
-                    "y": yhat
-                })
-            else:
-                forecast_df = None
+    forecast_df, backtest_df = _champion_forecast_and_backtest(
+        base_series=base_series,
+        horizon=horizon,
+        seasonal_period=seasonal_period,
+        champion_row=champion,
+        forward_transform=fwd,
+        inverse_transform=inv
+    )
 
-        # --- RandomForest
-        elif modelo == "RandomForest":
-            import re
-            k = int(re.search(r"lags=1\.\.(\d+)", params).group(1)) if "lags" in params else 6
-            df_sup = make_supervised_from_series(s_fit, list(range(1, k+1)))
-            X = df_sup.drop(columns=["y"]).values
-            y = df_sup["y"].values
-            rf = RandomForestRegressor(random_state=RANDOM_STATE)
-            rf.fit(X, y)
-            hist = list(s_fit.values)
-            preds = []
-            for _ in range(horizon):
-                row = {f"lag_{i}": hist[-i] for i in range(1, k+1)}
-                for col in df_sup.columns:
-                    if col.startswith("month_"):
-                        row[col] = 0
-                X_new = np.array([[row.get(c, 0) for c in df_sup.drop(columns=["y"]).columns]])
-                y_pred = float(rf.predict(X_new))
-                preds.append(y_pred)
-                hist.append(y_pred)
-            yhat = np.array(preds)
-            if inv_func:
-                yhat = inv_func(yhat)
-            forecast_df = pd.DataFrame({
-                "ds": pd.date_range(s_fit.index[-1] + pd.offsets.MonthBegin(1), periods=horizon, freq="MS"),
-                "y": yhat
-            })
-
-        else:
-            forecast_df = None
-
-        # Salva dentro dos atributos do DataFrame final
-        if forecast_df is not None:
-            df_out.attrs["forecast_df"] = forecast_df
-            log(f"[OK] Previsão do modelo campeão ({modelo}) gerada e anexada.")
-        else:
-            log("[WARN] Não foi possível gerar forecast_df para o modelo campeão.")
-
-    except Exception as e:
-        log(f"[ERRO] Falha ao gerar previsão do campeão: {e}")
-
+    # Anexa para o app (págs. 04 e 07)
+    df_out.attrs["champion"] = champion.to_dict()
+    df_out.attrs["forecast_df"] = forecast_df
+    df_out.attrs["forecast_horizon"] = horizon
+    df_out.attrs["backtest"] = backtest_df
+    # ========= /PATCH =========
 
     # Ordenação leve para visualização (não afeta o campeão já escolhido)
     df_out = df_out.sort_values(by=["preprocess","model","MAE","RMSE"]).reset_index(drop=True)
