@@ -1157,10 +1157,13 @@ except Exception as e:
     # ========= PATCH: gerar forecast_df e backtest e anexar nas attrs =========
     # seleciona transform conforme preprocess do campeão
     prep = str(champion.get("preprocess", "original")).lower()
-    fwd, inv = (None, None)
+    fwd_transform, inv_transform = (None, None)
     if prep.startswith("log"):
-        # reconstroi transformadores (epsilon/shift) — suficiente para reverter a escala
-        fwd, inv, _ = _log_fwd_inv_from_params(base_series, str(champion.get("preprocess_params", "")))
+        fwd_transform, inv_transform, _ = _log_fwd_inv_from_params(
+            base_series,
+            str(champion.get("preprocess_params", ""))
+        )
+
 
 
     forecast_df, backtest_df = _champion_forecast_and_backtest(
