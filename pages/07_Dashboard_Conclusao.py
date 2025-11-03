@@ -194,6 +194,13 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("Diagnóstico de vieses da previsão")
 
+    st.markdown("""
+    > O **viés** de previsão mede se o modelo tende a **superestimar** ou **subestimar** os valores reais ao longo do tempo.  
+    > Quando o viés é **positivo**, o modelo prevê valores maiores do que o realizado; quando é **negativo**, prevê valores menores.  
+    > Um modelo sem viés apresenta erros que oscilam em torno de zero, indicando previsões equilibradas sem tendência sistemática.
+    """)
+
+
     # 1) Tenta recuperar um backtest com ds, y_true, y_pred
     bt = None
     if res is not None and hasattr(res, "attrs"):
