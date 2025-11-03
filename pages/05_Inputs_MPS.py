@@ -30,18 +30,18 @@ if "forecast_df" not in st.session_state or "forecast_h" not in st.session_state
 fcst = st.session_state["forecast_df"][["ds", "y"]].copy()
 horizon = int(st.session_state["forecast_h"])
 
-# Garantir Timestamp mensal (MS)
+# Garantimos que 'ds' está em Timestamp mensal (MS)
 ds_ts = pd.to_datetime(fcst["ds"]).dt.to_period("M").dt.to_timestamp()
 
-# rótulo MÊS/ANO (ex.: Set/25)
+# rótulo bonito MÊS/ANO em PT-BR (ex.: Set/25)
 PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
 def fmt_mmyy(ts: pd.Timestamp) -> str:
     m = ts.month
     yy = ts.year % 100
     return f"{PT_MON[m-1]}/{yy:02d}"
 
-labels_raw: list[pd.Timestamp] = ds_ts.tolist()
-labels_str: list[str] = [fmt_mmyy(ts) for ts in ds_ts]
+labels_raw: list[pd.Timestamp] = ds_ts.tolist()          # valores "reais"
+labels_str: list[str] = [fmt_mmyy(ts) for ts in ds_ts]    # rótulos para UI
 idx_by_label_str = {s: i for i, s in enumerate(labels_str)}
 
 st.caption(f"🔗 Horizonte atual da Previsão: **{horizon} meses**.")
@@ -91,8 +91,11 @@ st.subheader("2) Estoque de segurança — parâmetros")
 row = st.columns([1.2, 1, 1])
 with row[0]:
     auto_ss = st.checkbox("Ativar SS automático (variável por mês)", value=bool(get("auto_ss", True)))
-    ss_method = st.radio("Método", ["CV (%)", "σ absoluto"],
-                         index=0 if get("ss_method", "CV (%)") == "CV (%)" else 1, horizontal=True)
+    ss_method = st.radio(
+        "Método", ["CV (%)", "σ absoluto"],
+        index=0 if get("ss_method", "CV (%)") == "CV (%)" else 1,
+        horizontal=True
+    )
 with row[1]:
     z_choice = st.selectbox(
         "Nível de serviço (z)", ["90%", "95%", "97.5%", "99%"],
@@ -166,50 +169,59 @@ values = orders_row_df.loc["Em carteira"].astype(int).reindex(labels_str).tolist
 orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 
 # =========================
-# 5) EPQ — Parâmetros adaptáveis (mensal ou anual)
+# 5) EPQ — Parâmetros de custos (nomenclatura da aula)
 # =========================
-st.subheader("5) EPQ — Parâmetros de custos (escolha a base de tempo)")
+st.subheader("5) EPQ — Parâmetros de custos (nomenclatura da aula)")
 
+# Base de tempo dos parâmetros (D, H e r). A conversão será tratada na conclusão.
 time_base = st.radio(
-    "Base de tempo dos parâmetros (para D, p, H e r):",
+    "Base de tempo dos parâmetros (para D, H e r):",
     options=["por mês", "por ano"],
     index=0 if get("time_base", "por mês") == "por mês" else 1,
-    horizontal=True
+    horizontal=True,
+    help="Escolha como você está informando as taxas. A conversão, se necessária, será feita na página de conclusão."
 )
 
-# D mensal automático pela previsão
-try:
-    D_month = float(pd.to_numeric(fcst["y"], errors="coerce").mean())
-except Exception:
-    D_month = float("nan")
-
-# Converte para a base escolhida
-if time_base == "por mês":
-    D_display = D_month
-    unit_rate = "mês"
-    mult = 1.0
-else:
-    D_display = (0.0 if np.isnan(D_month) else 12.0 * D_month)
-    unit_rate = "ano"
-    mult = 12.0  # para converter mensal -> anual
-
+# --- EPQ: A, D (não-editável) e p ---
 cA, cD_view, cP = st.columns(3)
 with cA:
     A = st.number_input(
-        "A — Custo fixo por setup (R$)",
+        "A — Custo fixo por setup/encomenda (R$)",
         min_value=0.0, step=10.0, value=float(get("A", 0.00)),
-        help="Custo fixo cada vez que prepara a produção (setup)."
+        help="Custo fixo cada vez que prepara a produção (setup) ou faz uma encomenda."
     )
+
+# D mensal automático pela previsão (ignora NaN)
+try:
+    D_month = float(np.nanmean(pd.to_numeric(fcst["y"], errors="coerce")))
+except Exception:
+    D_month = float("nan")
+
+# Converte D para a base escolhida
+if time_base == "por mês":
+    D_display = 0.0 if np.isnan(D_month) else D_month
+    unit_rate = "mês"
+else:
+    D_display = 0.0 if np.isnan(D_month) else 12.0 * D_month
+    unit_rate = "ano"
+
 with cD_view:
-    st.metric(f"D — Taxa de demanda (unid/{unit_rate})", value=f"{0 if np.isnan(D_display) else round(D_display, 2)}")
+    st.text_input(
+        f"D — Taxa de demanda (unid/{unit_rate})",
+        value=(f"{D_display:.2f}" if not np.isnan(D_display) else ""),
+        disabled=True,
+        help="Valor **não editável**: média da demanda prevista (se “por ano”, é a média mensal × 12)."
+    )
+
 with cP:
     p = st.number_input(
         f"p — Taxa de produção (unid/{unit_rate})",
         min_value=0.0, step=1.0, value=float(get("p", 0.0)),
-        help=f"Capacidade de produção do item (na base escolhida; EPQ requer p > D)."
+        help=f"Capacidade de produção na base escolhida (EPQ requer p > D)."
     )
 
-st.markdown(f"**H — Custo de manter (R$/unid/{unit_rate})**")
+# H direto ou a partir de r·v
+st.markdown("**H — Custo de manter por unidade e por período**")
 h_mode = st.radio(
     "Como deseja informar H?",
     options=["Informar H diretamente", "Calcular H a partir de r e v"],
@@ -221,9 +233,9 @@ colH1, colH2, colH3 = st.columns(3)
 if h_mode == "Informar H diretamente":
     with colH1:
         H = st.number_input(
-            f"H — Custo de manter (R$/unid/{unit_rate})",
+            f"H — Custo de manter (R$ por unid/{unit_rate})",
             min_value=0.0, step=1.0, value=float(get("H", 0.0)),
-            help=f"Custo de manter uma unidade em estoque por {unit_rate}."
+            help="Custo de manter uma unidade em estoque por período (na base escolhida)."
         )
     r = get("r", None)
     v = get("v", None)
@@ -231,17 +243,16 @@ else:
     with colH1:
         r = st.number_input(
             f"r — Taxa de manutenção (R$/$ por {unit_rate})",
-            min_value=0.0, step=0.001,
-            value=float(get("r", 0.02 if time_base == "por mês" else 0.20)),
-            help=f"Ex.: 0,02 R$/$/{'mês' if time_base=='por mês' else 'ano'}."
+            min_value=0.0, step=0.01, value=float(get("r", 0.20 if time_base=="por ano" else 0.02)),
+            help="Taxa de manutenção (por exemplo 0,20 R$/$/ano)."
         )
     with colH2:
         v = st.number_input(
-            "v — Valor unitário do item (R$/unid)",
+            "v — Valor unitário do item (R$ por unid)",
             min_value=0.0, step=1.0, value=float(get("v", 0.0)),
             help="Usado com r para obter H = r·v."
         )
-    H = None  # será calculado depois
+    H = None  # será calculado na página de conclusão
 
 # (opcional) Custo de falta / ruptura por unidade
 st.markdown("**π — Custo de falta (opcional)**")
@@ -250,25 +261,13 @@ with colPi:
     pi_shortage = st.number_input(
         "π — Custo de falta/ruptura (R$ por unidade não atendida)",
         min_value=0.0, step=1.0, value=float(get("pi_shortage", 0.0)),
-        help="Opcional. Penalidade por unidade não atendida."
+        help="Opcional. Se informado, pode ser usado para analisar penalidade de ruptura."
     )
 
 # =========================
 # SALVAR
 # =========================
 if st.button("Salvar inputs do MPS", type="primary"):
-    # Normalizações úteis para a conclusão (sempre em base mensal)
-    # - D_month já calculado acima (média mensal da previsão)
-    # - Se p/H/r informados em base anual, convertemos para mensal (regra simples)
-    if time_base == "por mês":
-        p_month = float(p)
-        H_month = float(H) if H is not None else None
-        r_month = float(r) if r is not None else None
-    else:
-        p_month = float(p) / 12.0
-        H_month = (float(H) / 12.0) if H is not None else None
-        r_month = (float(r) / 12.0) if r is not None else None
-
     st.session_state["mps_inputs"] = {
         # Seções 1–3
         "item_name": item_name,
@@ -287,27 +286,17 @@ if st.button("Salvar inputs do MPS", type="primary"):
         # Seção 4 — pedidos firmes
         "firm_orders": orders_df.copy(),
 
-        # Seção 5 — EPQ (base escolhida + normalizações)
-        "time_base": time_base,           # "por mês" ou "por ano"
+        # Seção 5 — EPQ (nomenclatura aula)
+        "time_base": time_base,     # "por mês" ou "por ano"
         "A": float(A),
-
-        # D: guardamos a exibida na base escolhida e a mensal normalizada
-        "D": float(0.0 if np.isnan(D_display) else D_display),   # na base escolhida
-        "D_month": float(0.0 if np.isnan(D_month) else D_month), # sempre mensal
-
-        # p/H/r conforme informados + versões mensais
-        "p": float(p),                 # na base escolhida
-        "p_month": float(p_month),     # normalizado ao mês
-
-        "h_mode": h_mode,
-        "H": float(H) if H is not None else None,   # na base escolhida
-        "H_month": float(H_month) if H_month is not None else None,
-
-        "r": float(r) if r is not None else None,   # na base escolhida
-        "r_month": float(r_month) if r_month is not None else None,
-
+        # Guardamos D nas duas bases para facilitar uso depois:
+        "D_month": float(D_month) if not np.isnan(D_month) else None,
+        "D_effective": float(D_display) if not np.isnan(D_display) else None,  # conforme base escolhida
+        "p": float(p),
+        "h_mode": h_mode,           # controla como H será derivado na conclusão
+        "H": float(H) if H is not None else None,
+        "r": float(r) if r is not None else None,
         "v": float(v) if v is not None else None,
-
         "pi_shortage": float(pi_shortage),
     }
     st.session_state["mps_firm_orders"] = orders_df.copy()
