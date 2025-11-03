@@ -293,7 +293,7 @@ with tabs[1]:
         )
 
 # ======================================================
-# TAB 3 — MPS & KPIs (robusto)
+# TAB 3 — MPS & KPIs (decisão + custos + ATP)
 # ======================================================
 with tabs[2]:
     st.subheader("KPIs do MPS")
@@ -302,48 +302,153 @@ with tabs[2]:
         st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte.")
         st.page_link("pages/06_MPS.py", label="📅 Ir para 06_MPS (Plano Mestre de Produção)")
     else:
-        # formata cabeçalhos de datas para Mês/Ano
-        new_cols = []
+        # -------------------------------
+        # Seleção de colunas (apenas datas)
+        # -------------------------------
+        date_cols, date_labels = [], []
         for c in mps_tbl_display.columns:
             ts = _to_ts(c)
-            if pd.isna(ts):
-                new_cols.append(str(c))
-            else:
-                new_cols.append(ts.strftime("%b/%y").title().replace(".", ""))  # Set/25 etc.
-        mps_show = mps_tbl_display.copy()
-        mps_show.columns = new_cols
+            if not pd.isna(ts):
+                date_cols.append(c)
+                date_labels.append(ts.strftime("%b/%y").title().replace(".", ""))  # Set/25
+        idx_map = dict(zip(date_cols, date_labels))
 
-        # exibe
-        st.dataframe(mps_show, use_container_width=True, height=320)
+        def _row(name):
+            if name in mps_tbl_display.index:
+                s = mps_tbl_display.loc[name, date_cols]
+                return pd.Series(pd.to_numeric(s, errors="coerce").astype(float).values,
+                                 index=pd.to_datetime([_to_ts(c) for c in date_cols]))
+            return None
 
-        # KPIs simples (exemplo)
-        try:
-            estoque_final = int(mps_tbl_display.loc["Estoque Proj.", mps_tbl_display.columns[-1]])
-        except Exception:
-            estoque_final = np.nan
-        try:
-            tot_receb = int(mps_tbl_display.loc["Qtde. MPS"].sum())
-        except Exception:
-            tot_receb = np.nan
-        try:
-            atp_ultimo = int(mps_tbl_display.loc["ATP(cum)"].iloc[-1])
-        except Exception:
-            atp_ultimo = np.nan
+        q_mps   = _row("Qtde. MPS")
+        estoque = _row("Estoque Proj.")
+        atp     = _row("ATP")  # se existir direto
+        atp_cum = _row("ATP(cum)")
 
-        st.markdown("### Resumo")
-        k1, k2, k3 = st.columns(3)
-        _kpi("Estoque Projetado (final do horizonte)", _safe_num(estoque_final, 0))
-        _kpi("Total planejado (Qtde. MPS)", _safe_num(tot_receb, 0))
-        _kpi("ATP acumulado (último período)", _safe_num(atp_ultimo, 0))
+        if atp is None and atp_cum is not None:
+            # ATP por período = diferença do acumulado
+            atp = atp_cum.diff().fillna(atp_cum)
 
-        st.caption("KPIs adicionais (cobertura, OTIF simulado, rupturas projetadas etc.) podem ser incluídos conforme sua regra de negócio.")
+        # -------------------------------
+        # Parâmetros econômicos (com defaults)
+        # Se preferir mover para a página 05_Inputs_MPS, basta ler de st.session_state.
+        # -------------------------------
+        with st.expander("⚙️ Parâmetros econômicos (edite se necessário)", expanded=False):
+            colA, colB, colC, colD = st.columns(4)
+            unit_cost = colA.number_input("Custo unitário de produção/compra (R$)", min_value=0.0, value=float(st.session_state.get("mps_unit_cost", 1.0)), step=0.1)
+            hold_rate = colB.number_input("Custo de manter estoque (% ao mês)", min_value=0.0, value=float(st.session_state.get("mps_hold_rate", 2.0)), step=0.1)
+            hold_abs  = colC.number_input("OU custo de estoque (R$/unid·mês)", min_value=0.0, value=float(st.session_state.get("mps_hold_abs", 0.0)), step=0.1, help="Se > 0, ignora o percentual.")
+            stockout_c = colD.number_input("Custo de falta (R$/unid)", min_value=0.0, value=float(st.session_state.get("mps_stockout", 10.0)), step=0.5)
+            setup_c = st.number_input("Custo de setup (R$/lote de MPS)", min_value=0.0, value=float(st.session_state.get("mps_setup", 0.0)), step=1.0, help="Multiplica pelo nº de períodos com produção > 0.")
+
+        # Guarda (opcional)
+        st.session_state.update(dict(mps_unit_cost=unit_cost, mps_hold_rate=hold_rate,
+                                     mps_hold_abs=hold_abs, mps_stockout=stockout_c, mps_setup=setup_c))
+
+        # -------------------------------
+        # KPIs de custo
+        # -------------------------------
+        # Produção: custo simples por unidade produzida
+        prod_cost = np.nan
+        if q_mps is not None:
+            prod_cost = float(np.nansum(np.maximum(q_mps.values, 0)) * unit_cost)
+
+        # Manutenção de estoque: soma estoque projetado positivo * custo por unidade·mês
+        hold_cost = np.nan
+        if estoque is not None:
+            per_unit_hold = (hold_abs if hold_abs > 0 else (unit_cost * (hold_rate/100.0)))
+            hold_cost = float(np.nansum(np.maximum(estoque.values, 0)) * per_unit_hold)
+
+        # Falta: estoque negativo acumulado convertido em unidades em falta
+        stockout_cost = np.nan
+        if estoque is not None:
+            faltas_unid = float(np.nansum(np.abs(np.minimum(estoque.values, 0))))
+            stockout_cost = faltas_unid * stockout_c
+
+        # Setup: nº de períodos com produção > 0
+        setup_cost = np.nan
+        if q_mps is not None:
+            setups = int(np.nansum((q_mps.values > 0).astype(int)))
+            setup_cost = setups * setup_c
+
+        # Total relevante
+        total_cost = np.nansum([x for x in [prod_cost, hold_cost, stockout_cost, setup_cost] if np.isfinite(x)])
+
+        # KPIs de nível (sem "total planejado", conforme pedido)
+        estoque_final = int(estoque.iloc[-1]) if estoque is not None and len(estoque) else np.nan
+        rupturas = int(np.nansum((estoque.values < 0).astype(int))) if estoque is not None else np.nan
+
+        st.markdown("### Resumo econômico e operacional")
+        k1, k2, k3, k4, k5 = st.columns(5)
+        _kpi("Custo de produção (R$)", _safe_num(prod_cost, 0), "∑ Qtde. MPS × custo unitário")
+        _kpi("Custo de estoque (R$)", _safe_num(hold_cost, 0), "∑ estoque+ × custo por unid·mês")
+        _kpi("Custo de falta (R$)", _safe_num(stockout_cost, 0), "Unidades em falta × custo de falta")
+        _kpi("Custo de setup (R$)", _safe_num(setup_cost, 0), "Períodos com produção × custo de setup")
+        _kpi("Custo relevante total (R$)", _safe_num(total_cost, 0), "Soma dos custos acima")
+
+        k6, k7 = st.columns(2)
+        _kpi("Estoque projetado no fim", _safe_num(estoque_final, 0))
+        _kpi("Nº de períodos com ruptura", _safe_num(rupturas, 0))
+
+        st.caption("Dica: se preferir, movemos esses parâmetros para a página **Inputs do MPS** e os tornamos persistentes por produto.")
+
+        # -------------------------------
+        # Explorador de ATP (atendimento de demandas extras)
+        # -------------------------------
+        st.markdown("### Explorador de ATP — atendimento de demandas extras")
+        if atp is None:
+            st.info("Não encontrei a linha **ATP** (ou **ATP(cum)**) no MPS para calcular a folga mensal.")
+        else:
+            # Entrada: demanda extra fixa por mês
+            extra = st.slider("Demanda extra (unidades por mês)", min_value=0, max_value=int(max(100, np.nanmax(atp.values))), value=0, step=1)
+
+            df_atp = pd.DataFrame({
+                "ds": atp.index,
+                "ATP": atp.values,
+                "Atende_extra?": (atp.values >= extra) if extra > 0 else np.ones_like(atp.values, dtype=bool),
+            })
+            df_atp["Sobra"]   = np.where(df_atp["ATP"] - extra >= 0, df_atp["ATP"] - extra, 0)
+            df_atp["Déficit"] = np.where(df_atp["ATP"] - extra < 0,  -(df_atp["ATP"] - extra), 0)
+
+            # KPIs do explorador
+            col_a, col_b, col_c = st.columns(3)
+            _kpi("Meses que atendem 100%", _safe_num(int(df_atp["Atende_extra?"].sum()), 0))
+            _kpi("Sobra total (unid)", _safe_num(float(df_atp["Sobra"].sum()), 0))
+            _kpi("Déficit total (unid)", _safe_num(float(df_atp["Déficit"].sum()), 0))
+
+            # Gráfico (barras azul-escuro)
+            import altair as alt
+            ch_atp = (
+                alt.Chart(df_atp)
+                .mark_bar(color="#1e3a8a")
+                .encode(
+                    x=alt.X("ds:T", title="Mês"),
+                    y=alt.Y("ATP:Q", title="ATP (unidades)"),
+                    tooltip=[
+                        alt.Tooltip("ds:T", title="Período"),
+                        alt.Tooltip("ATP:Q", title="ATP", format=",.0f"),
+                        alt.Tooltip("Sobra:Q", format=",.0f"),
+                        alt.Tooltip("Déficit:Q", format=",.0f"),
+                        alt.Tooltip("Atende_extra?:N", title="Atende extra?")
+                    ]
+                )
+                .properties(height=260, width="container")
+                .interactive()
+            )
+            st.altair_chart(ch_atp, use_container_width=True)
+
+            # Tabela compacta (opcional)
+            with st.expander("Ver detalhes por mês", expanded=False):
+                show = df_atp.copy()
+                show["Mês"] = show["ds"].dt.strftime("%b/%y").str.title()
+                st.dataframe(
+                    show[["Mês","ATP","Sobra","Déficit","Atende_extra?"]]
+                    .rename(columns={"Atende_extra?":"Atende?"}),
+                    use_container_width=True, height=240
+                )
 
     st.divider()
-    cL, cR = st.columns(2)
-    with cL:
-        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")
-    with cR:
-        st.page_link("pages/04_Previsao.py", label="🛠️ Ajustar Previsão", icon="🧪")
+
 
 # ======================================================
 # TAB 4 — Recomendações (texto curto e objetivo)
