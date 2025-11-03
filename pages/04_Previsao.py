@@ -1,6 +1,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+# ==== checagem de sintaxe do pipeline, antes de importar
+from pathlib import Path
+import py_compile, streamlit as st
+
+ROOT = Path(__file__).resolve().parent.parent
+CORE = ROOT / "core"
+PIPE_PATH = CORE / "pipeline.py"
+
+try:
+    py_compile.compile(str(PIPE_PATH), doraise=True)
+except py_compile.PyCompileError as e:
+    st.error("Erro de sintaxe em core/pipeline.py")
+    st.code(e.msg, language="text")
+    st.stop()
+
+
 import sys, re, copy, contextlib, io, traceback, time
 from pathlib import Path
 import numpy as np
