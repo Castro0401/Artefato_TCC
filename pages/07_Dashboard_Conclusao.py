@@ -80,6 +80,112 @@ with tabs[0]:
 
     # KPIs do campeão (se existirem)
     c1, c2, c3, c4 = st.columns(4)
+    mae = champion.get("MAE")
+    smape = champion.get("sMAPE")
+    rmse = champion.get("RMSE")
+    mape = champion.get("MAPE")
+
+    # Avaliação textual para cada métrica
+    def _avaliar_mae(v):
+        if v is None or np.isnan(v): return "—"
+        if v < 10: return "Excelente precisão"
+        elif v < 30: return "Boa precisão"
+        elif v < 60: return "Precisão moderada"
+        else: return "Erro alto — revisar modelo"
+    
+    def _avaliar_smape(v):
+        if v is None or np.isnan(v): return "—"
+        if v < 10: return "Muito bom (baixo erro percentual)"
+        elif v < 20: return "Bom desempenho"
+        elif v < 40: return "Erro moderado"
+        else: return "Erro elevado — previsão instável"
+    
+    def _avaliar_rmse(v):
+        if v is None or np.isnan(v): return "—"
+        return "Menor é melhor — mede a dispersão dos erros"
+    
+    def _avaliar_mape(v):
+        if v is None or np.isnan(v): return "—"
+        if v < 10: return "Excelente (erro < 10%)"
+        elif v < 20: return "Bom (erro moderado)"
+        elif v < 30: return "Atenção (erro considerável)"
+        else: return "Ruim (erro alto)"
+
+    c1.metric("MAE", _safe_num(mae))
+    c1.caption(_avaliar_mae(mae))
+
+    c2.metric("sMAPE (%)", _safe_num(smape))
+    c2.caption(_avaliar_smape(smape))
+
+    c3.metric("RMSE", _safe_num(rmse))
+    c3.caption(_avaliar_rmse(rmse))
+
+    c4.metric("MAPE (%)", _safe_num(mape))
+    c4.caption(_avaliar_mape(mape))
+
+    st.markdown("---")
+
+    # ----------------- gráfico Real x Previsão -----------------
+    hist = None
+    if isinstance(hist_df_norm, pd.DataFrame) and {"ds","y"}.issubset(hist_df_norm.columns):
+        hist = hist_df_norm.copy()
+        hist["ds"] = hist["ds"].apply(_to_ts)
+        hist = hist.dropna(subset=["ds"]).rename(columns={"y":"Real"})
+
+    prev = None
+    if isinstance(fcst_df, pd.DataFrame) and {"ds","y"}.issubset(fcst_df.columns):
+        prev = fcst_df.copy()
+        prev["ds"] = prev["ds"].apply(_to_ts)
+        prev = prev.dropna(subset=["ds"]).rename(columns={"y":"Previsão"})
+
+    if hist is None:
+        st.info("Sem histórico em memória. Gere o upload na página **01_Upload**.")
+    else:
+        plot_df = pd.DataFrame({"ds": hist["ds"], "série": "Real", "valor": hist["Real"]})
+        if prev is not None and len(prev) > 0:
+            plot_df = pd.concat([
+                plot_df,
+                pd.DataFrame({"ds": prev["ds"], "série": "Previsão", "valor": prev["Previsão"]})
+            ], ignore_index=True)
+
+        import altair as alt
+        chart = (
+            alt.Chart(plot_df)
+            .mark_line()
+            .encode(
+                x=alt.X("ds:T", title="Mês"),
+                y=alt.Y("valor:Q", title="Quantidade"),
+                color=alt.Color(
+                    "série:N",
+                    scale=alt.Scale(domain=["Real","Previsão"], range=["#1e3a8a", "#60a5fa"]),
+                    legend=alt.Legend(title=None, orient="top")
+                ),
+                tooltip=[
+                    alt.Tooltip("ds:T", title="Período"),
+                    alt.Tooltip("série:N", title="Série"),
+                    alt.Tooltip("valor:Q", title="Valor", format=",.0f"),
+                ]
+            )
+            .properties(height=360, width="container")
+            .interactive()
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+    st.divider()
+    cL, cR = st.columns(2)
+    with cL:
+        st.page_link("pages/05_Inputs_MPS.py", label="⬅️ Voltar: Inputs do MPS", icon="⚙️")
+    with cR:
+        st.page_link("pages/04_Previsao.py", label="🛠️ Ajustar Previsão", icon="🧪")
+
+
+    # ----------------- pega campeão + métricas -----------------
+    champion = {}
+    if res is not None and hasattr(res, "attrs"):
+        champion = res.attrs.get("champion", {}) or {}
+
+    # KPIs do campeão (se existirem)
+    c1, c2, c3, c4 = st.columns(4)
     _kpi("MAE",        _safe_num(champion.get("MAE")),        "Erro Médio Absoluto", key="mae")
     _kpi("sMAPE (%)",  _safe_num(champion.get("sMAPE")),      "Erro percentual simétrico", key="smape")
     _kpi("RMSE",       _safe_num(champion.get("RMSE")),       "Raiz do erro quadrático médio", key="rmse")
