@@ -112,7 +112,7 @@ with st.form(key="previsao_form"):
     )
 
     # Controles de LOG/BOOTSTRAP
-    DO_LOG = st.sidebar.checkbox("Aplicar log (testar série log-transformada)", value=True)
+    DO_LOG = st.sidebar.checkbox("Aplicar log", value=True)
     DO_BOOTSTRAP = st.sidebar.checkbox("Ativar bootstrap", value=True)
 
     # Grava no session_state para outros pontos da página
