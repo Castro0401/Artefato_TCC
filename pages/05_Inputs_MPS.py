@@ -169,9 +169,9 @@ values = orders_row_df.loc["Em carteira"].astype(int).reindex(labels_str).tolist
 orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 
 # =========================
-# 5) EPQ — Parâmetros de custos (nomenclatura da aula)
+# 5)  Parâmetros de custos (nomenclatura da aula)
 # =========================
-st.subheader("5) EPQ — Parâmetros de custos (nomenclatura da aula)")
+st.subheader("5) Parâmetros de custos")
 
 def _as_float(x, default=0.0) -> float:
     try:
@@ -261,21 +261,67 @@ pi_shortage = st.number_input(
 # SALVAR
 # =========================
 if st.button("Salvar inputs do MPS", type="primary"):
-    st.session_state["mps_inputs"] = {
-        # Seções 1–4 já salvas antes…
-        # EPQ
-        "time_base": time_base,     # "por mês" ou "por ano"
+    # ponto de partida: preserva o que já havia
+    new_cfg = dict(st.session_state.get("mps_inputs", {}))
+
+    # Seção 1 — políticas e parâmetros do item (inclui Q = lot_size_default)
+    sec1 = {
+        "item_name": item_name,
+        "lot_policy_default": "FX" if lot_policy_default == "FX" else "L4L",
+        "lot_size_default": int(lot_size_default),    # <-- Q (lote do usuário)
+        "Q_user": int(lot_size_default),              # <-- alias para a aba de custos
+        "initial_inventory_default": int(initial_inventory_default),
+        "lead_time_default": int(lead_time_default),
+    }
+
+    # Seção 2 — estoque de segurança
+    sec2 = {
+        "auto_ss": bool(auto_ss),
+        "ss_method": ss_method,
+        "z_choice": z_choice,
+        "cv_pct": float(cv_pct) if 'cv_pct' in locals() and cv_pct is not None else None,
+        "sigma_abs": float(sigma_abs) if 'sigma_abs' in locals() and sigma_abs is not None else None,
+    }
+
+    # Seção 3 — congelamento
+    sec3 = {
+        "freeze_on": bool(freeze_on),
+        "frozen_range": tuple(frozen_range) if freeze_on else None,
+    }
+
+    # Seção 4 — pedidos firmes (linha “Em carteira”)
+    sec4 = {
+        "firm_orders": orders_df.copy(),
+    }
+
+    # Seção 5 — EPQ / custos
+    # guarda nas duas bases (informada e mensal); a mensal é a mais usada nos cálculos
+    D_month = float(D) if time_base == "por mês" else float(D) / 12.0
+    p_month = float(p) if time_base == "por mês" else float(p) / 12.0
+    sec5 = {
+        "time_base": time_base,   # "por mês" | "por ano"
         "A": float(A),
-        "D": float(D),              # já coerente com a base escolhida
-        "p": float(p),
+        "D": float(D),            # na base escolhida
+        "p": float(p),            # na base escolhida
+        "D_month": float(D_month),
+        "p_month": float(p_month),
         "h_mode": h_mode,
-        "H": float(H) if H is not None else None,
-        "r": float(r) if r is not None else None,
-        "v": float(v),              # <— GUARDA v SEMPRE
+        "H": float(H) if 'H' in locals() and H is not None else None,
+        "r": float(r) if 'r' in locals() and r is not None else None,
+        "v": float(v),            # v é obrigatório e sempre salvo
         "pi_shortage": float(pi_shortage),
     }
-    # mantém pedidos firmes
+
+    # junta tudo e salva
+    new_cfg.update(sec1)
+    new_cfg.update(sec2)
+    new_cfg.update(sec3)
+    new_cfg.update(sec4)
+    new_cfg.update(sec5)
+
+    st.session_state["mps_inputs"] = new_cfg
     st.session_state["mps_firm_orders"] = orders_df.copy()
+
     st.success("Inputs do MPS salvos com sucesso! ✅")
 
 # -------- Navegação --------
