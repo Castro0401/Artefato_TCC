@@ -865,25 +865,49 @@ with tabs[3]:
 
     q_min = max(1, int(0.25 * (D_lbl if D_lbl > 0 else 1)))
     q_max = max(q_min + 1, int(4 * (D_lbl if D_lbl > 0 else 10)))
-    q_grid = np.arange(q_min, q_max + 1, max(1, (q_max - q_min) // 25 or 1))
+    step  = max(1, (q_max - q_min) // 25)  # grade razoável
+    q_grid = np.arange(q_min, q_max + 1, step)
 
     data = []
     for q in q_grid:
-        c_s = cost_setup_month(A_lbl, D_lbl, q)
-        c_h = cost_holding_month(H_lbl, q, D_lbl, p_lbl) + H_lbl * ss_extra
+        c_s = float(cost_setup_month(A_lbl, D_lbl, q))
+        c_h = float(cost_holding_month(H_lbl, q, D_lbl, p_lbl) + H_lbl * ss_extra)
         data.append({"Q": int(q), "Setup (mês)": c_s, "Manter (mês)": c_h, "Total (mês)": c_s + c_h})
 
     dfC = pd.DataFrame(data)
 
-    chart = alt.Chart(dfC).transform_fold(
-        ["Setup (mês)", "Manter (mês)", "Total (mês)"], as_=["Componente", "Custo"]
-    ).mark_line(point=True).encode(
-        x=alt.X("Q:Q", title="Tamanho do lote Q (unidades)"),
-        y=alt.Y("Custo:Q", title="Custo mensal (R$)"),
-        color=alt.Color("Componente:N"),
-        tooltip=["Q", "Componente", alt.Tooltip("Custo:Q", format=".2f")]
-    ).properties(height=260)
-    st.altair_chart(chart, use_container_width=True)
+    # Converte para formato longo e força tipos numéricos
+    if not dfC.empty:
+        df_long = (
+            dfC.melt(id_vars="Q", var_name="Componente", value_name="Custo")
+            .dropna(subset=["Q", "Custo"])
+            .assign(Q=lambda d: pd.to_numeric(d["Q"], errors="coerce").astype("int64"),
+                    Custo=lambda d: pd.to_numeric(d["Custo"], errors="coerce").astype(float))
+        )
+    else:
+        df_long = pd.DataFrame(columns=["Q", "Componente", "Custo"])
+
+    if df_long.empty or not np.isfinite(df_long["Custo"]).any():
+        st.info("Não há dados suficientes para desenhar a curva C(Q). Ajuste D, p, A, H ou Q.")
+    else:
+        import altair as alt
+        # (opcional) remover limite de linhas do Altair
+        alt.data_transformers.disable_max_rows()
+
+        chart = (
+            alt.Chart(df_long)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Q:Q", title="Tamanho do lote Q (unidades)"),
+                y=alt.Y("Custo:Q", title="Custo mensal (R$)"),
+                color=alt.Color("Componente:N"),
+                tooltip=[alt.Tooltip("Q:Q"),
+                            alt.Tooltip("Componente:N"),
+                            alt.Tooltip("Custo:Q", format=".2f")]
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(chart, use_container_width=True)
 
     # ------------------------------------------------------
     # Comparação com MPS atual (se existir)
