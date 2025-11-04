@@ -940,7 +940,7 @@ with tabs[3]:
 
     colA, colB, colC = st.columns(3)
     with colA:
-        st.metric("Cenário (MPS Simulado) — Total (R$)", _safe(cost_total_sim, 2))
+        st.metric("MPS Simulado — Total (R$)", _safe(cost_total_sim, 2))
     with colB:
         if base_total is not None:
             st.metric("MPS atual — Total (R$)", _safe(base_total, 2))
