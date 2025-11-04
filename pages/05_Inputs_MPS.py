@@ -173,49 +173,49 @@ orders_df = pd.DataFrame({"ds": labels_raw, "y": values})
 # =========================
 st.subheader("5) EPQ — Parâmetros de custos (nomenclatura da aula)")
 
-# Base de tempo dos parâmetros (D, H, r). Conversões (mês/ano) ficam para a conclusão.
+def _as_float(x, default=0.0) -> float:
+    try:
+        if x is None: return float(default)
+        if isinstance(x, str) and x.strip() == "": return float(default)
+        return float(x)
+    except Exception:
+        return float(default)
+
+# Base de tempo
 time_base = st.radio(
     "Base de tempo dos parâmetros (para D, H e r):",
     options=["por mês", "por ano"],
     index=0 if get("time_base", "por mês") == "por mês" else 1,
     horizontal=True,
-    help="A conversão, se necessário, será feita na página de conclusão."
+    help="A conversão, se necessária, será feita na página de conclusão."
 )
 
-# Demanda média D (vinda da previsão) — apenas informativa/lock
-D_media_mensal = float(np.nanmean(fcst["y"])) if len(fcst) else 0.0
-D_label = "D — Taxa de demanda (unid/mês)" if time_base == "por mês" else "D — Taxa de demanda (unid/ano)"
+# A (setup), D (taxa de demanda), p (taxa de produção)
 cA, cD, cP = st.columns(3)
 with cA:
     A = st.number_input(
         "A — Custo fixo por setup/encomenda (R$)",
-        min_value=0.0, step=10.0, value=float(get("A", 0.00)),
+        min_value=0.0, step=10.0, value=_as_float(get("A", 0.0), 0.0),
         help="Custo fixo cada vez que prepara a produção (setup) ou faz uma encomenda."
     )
 with cD:
-    # Mostramos D já preenchido e bloqueado: se 'por ano', multiplicamos por 12
-    D_val = D_media_mensal if time_base == "por mês" else (12.0 * D_media_mensal)
+    # D vem da média da previsão (já calculada na página de previsão); exibimos somente-leitura
+    fcst_df = st.session_state["forecast_df"][["ds", "y"]].copy()
+    D_media_mes = float(fcst_df["y"].mean()) if len(fcst_df) else 0.0
+    D = D_media_mes if time_base == "por mês" else D_media_mes * 12.0
     st.number_input(
-        D_label, min_value=0.0, step=1.0, value=float(D_val),
-        help="Demanda média estimada a partir da previsão (bloqueado).",
-        disabled=True
+        f"D — Taxa de demanda (unid/{'mês' if time_base=='por mês' else 'ano'})",
+        value=float(D), step=1.0, min_value=0.0, disabled=True,
+        help="Média da demanda prevista no horizonte atual."
     )
 with cP:
     p = st.number_input(
-        "p — Taxa de produção (unid/" + ("mês" if time_base=="por mês" else "ano") + ")",
-        min_value=0.0, step=1.0, value=float(get("p", 0.0)),
-        help="Capacidade de produção do item (no EPQ, p > D)."
+        f"p — Taxa de produção (unid/{'mês' if time_base=='por mês' else 'ano'})",
+        min_value=0.0, step=1.0, value=_as_float(get("p", 0.0), 0.0),
+        help="Capacidade de produção (EPQ exige p > D)."
     )
 
-# >>> v passa a ser OBRIGATÓRIO, sempre visível <<<
-st.markdown("**v — Valor unitário do item (obrigatório)**")
-v = st.number_input(
-    "v — Valor unitário (R$/unid) — obrigatório",
-    min_value=0.0, step=1.0, value=float(get("v", get("unit_cost", 0.0))),
-    help="Usado para custo de produzir e, se aplicável, para calcular H (quando H = r·v)."
-)
-
-# Forma de informar o custo de manter (H)
+# H — custo de manter (direto) ou via r·v
 st.markdown("**H — Custo de manter por unidade e por período**")
 h_mode = st.radio(
     "Como deseja informar H?",
@@ -224,69 +224,59 @@ h_mode = st.radio(
     horizontal=True
 )
 
-colH1, colH2 = st.columns(2)
+# v é obrigatório SEMPRE
+v_default = _as_float(get("v", None), _as_float(get("unit_cost", 0.0), 0.0))
+colV, colH1, colH2 = st.columns(3)
+with colV:
+    v = st.number_input(
+        "v — Valor unitário do item (R$/unid) **(obrigatório)**",
+        min_value=0.0, step=1.0, value=float(v_default),
+        help="Usado em C_prod = v·D e, se escolher, em H = r·v."
+    )
+
 if h_mode == "Informar H diretamente":
     with colH1:
         H = st.number_input(
-            "H — Custo de manter (R$ por unid/" + ("mês" if time_base=="por mês" else "ano") + ")",
-            min_value=0.0, step=1.0, value=float(get("H", 0.0)),
-            help="Custo de manter 1 unid em estoque por período (na base selecionada)."
+            f"H — Custo de manter (R$ por unid/{'mês' if time_base=='por mês' else 'ano'})",
+            min_value=0.0, step=1.0, value=_as_float(get("H", 0.0), 0.0),
+            help="Se preferir informar H direto, ainda assim v é obrigatório para os demais cálculos."
         )
-    r = None  # não é usado nesse modo
+    r = get("r", None)  # opcional (não usado)
 else:
     with colH1:
         r = st.number_input(
-            "r — Taxa de manutenção (R$/$ por " + ("mês" if time_base=="por mês" else "ano") + ")",
-            min_value=0.0, step=0.01, value=float(get("r", 0.20 if time_base=="por ano" else 0.02)),
-            help="Ex.: 0,20 R$/$/ano (20% ao ano). H será calculado como r·v na conclusão."
+            f"r — Taxa de manutenção (R$/$ por {'mês' if time_base=='por mês' else 'ano'})",
+            min_value=0.0, step=0.01, value=_as_float(get("r", 0.20 if time_base=='por ano' else 0.02), 0.0),
+            help="Taxa multiplicada por v para obter H = r·v."
         )
-    H = None  # calculado depois via r·v
+    H = None  # será calculado na conclusão
 
 # (opcional) Custo de falta / ruptura por unidade
 st.markdown("**π — Custo de falta (opcional)**")
 pi_shortage = st.number_input(
     "π — Custo de falta/ruptura (R$ por unidade não atendida)",
-    min_value=0.0, step=1.0, value=float(get("pi_shortage", get("shortage_cost", 0.0))),
-    help="Opcional. Se informado, pode ser usado para penalidade de ruptura."
+    min_value=0.0, step=1.0, value=_as_float(get("pi_shortage", get("shortage_cost", 0.0)), 0.0),
+    help="Opcional. Se informado, será usado para penalizar rupturas no horizonte."
 )
 
 # =========================
-# SALVAR (com validação de v obrigatório)
+# SALVAR
 # =========================
 if st.button("Salvar inputs do MPS", type="primary"):
-    if v <= 0:
-        st.error("Informe **v — Valor unitário (R$/unid)** maior que 0. Ele é obrigatório.")
-        st.stop()
-
     st.session_state["mps_inputs"] = {
-        # Seções 1–3 (já existentes acima)
-        "item_name": item_name,
-        "lot_policy_default": "FX" if lot_policy_default == "FX" else "L4L",
-        "lot_size_default": int(lot_size_default),
-        "initial_inventory_default": int(initial_inventory_default),
-        "lead_time_default": int(lead_time_default),
-        "auto_ss": bool(auto_ss),
-        "ss_method": ss_method,
-        "z_choice": z_choice,
-        "cv_pct": float(cv_pct) if 'cv_pct' in locals() and cv_pct is not None else None,
-        "sigma_abs": float(sigma_abs) if 'sigma_abs' in locals() and sigma_abs is not None else None,
-        "freeze_on": bool(freeze_on),
-        "frozen_range": tuple(frozen_range) if freeze_on else None,
-
-        # Seção 4 — pedidos firmes
-        "firm_orders": orders_df.copy(),
-
-        # Seção 5 — EPQ (com v obrigatório)
-        "time_base": time_base,   # "por mês" ou "por ano"
+        # Seções 1–4 já salvas antes…
+        # EPQ
+        "time_base": time_base,     # "por mês" ou "por ano"
         "A": float(A),
-        "D": float(D_val),        # armazenamos o valor exibido (mês/ano conforme seleção)
+        "D": float(D),              # já coerente com a base escolhida
         "p": float(p),
         "h_mode": h_mode,
         "H": float(H) if H is not None else None,
         "r": float(r) if r is not None else None,
-        "v": float(v),            # << OBRIGATÓRIO
+        "v": float(v),              # <— GUARDA v SEMPRE
         "pi_shortage": float(pi_shortage),
     }
+    # mantém pedidos firmes
     st.session_state["mps_firm_orders"] = orders_df.copy()
     st.success("Inputs do MPS salvos com sucesso! ✅")
 
