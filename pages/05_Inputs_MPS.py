@@ -194,9 +194,9 @@ time_base = st.radio(
 cA, cD, cP = st.columns(3)
 with cA:
     A = st.number_input(
-        "A — Custo fixo por setup/encomenda (R$)",
+        "A — Custo fixo por setup (R$)",
         min_value=0.0, step=10.0, value=_as_float(get("A", 0.0), 0.0),
-        help="Custo fixo cada vez que prepara a produção (setup) ou faz uma encomenda."
+        help="Custo fixo cada vez que prepara a produção (setup)."
     )
 with cD:
     # D vem da média da previsão (já calculada na página de previsão); exibimos somente-leitura

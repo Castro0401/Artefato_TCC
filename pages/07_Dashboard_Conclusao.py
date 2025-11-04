@@ -510,6 +510,87 @@ with tabs[2]:
         st.warning("Parâmetros inválidos para EPQ: é preciso **p > D** e **H > 0**. "
                    "Ajuste no **05_Inputs_MPS**.")
 
+# =============================
+# ATP — “dá pra atender novas demandas?”
+# =============================
+st.markdown("### 🧮 ATP — Capacidade de atender novas demandas (por mês)")
+
+# 1) Obter ATP mensal
+mps_detail = st.session_state.get("mps_detail", None)
+
+def _monthly_atp_from_cum(df_disp: pd.DataFrame) -> pd.Series | None:
+    """Se houver linha 'ATP(cum)' em df de exibição, reconstrói ATP mensal."""
+    try:
+        idx_norm = df_disp.index.astype(str).str.strip().str.lower()
+        m = (idx_norm == "atp(cum)".lower())
+        if not m.any():
+            return None
+        row = df_disp.loc[df_disp.index[m][0]]
+        cum = pd.to_numeric(row.values, errors="coerce")
+        monthly = np.diff(np.r_[0, cum])
+        return pd.Series(np.clip(monthly, 0, None), index=df_disp.columns)
+    except Exception:
+        return None
+
+# a) melhor caso: coluna 'atp' no detalhe
+if isinstance(mps_detail, pd.DataFrame) and ("atp" in mps_detail.columns):
+    atp_series = pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0)
+    # rótulos de coluna no mesmo formato das outras seções
+    labels = st.session_state["forecast_df"]["ds"].tolist()
+    PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+    def _fmt(ts):
+        ts = pd.to_datetime(ts)
+        return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
+    col_labels = [_fmt(x) for x in labels]
+    atp_monthly = pd.Series(np.clip(atp_series.values, 0, None), index=col_labels)
+# b) fallback: reconstruir de 'ATP(cum)' da tabela exibida
+else:
+    atp_monthly = _monthly_atp_from_cum(mps_tbl_display)
+
+if atp_monthly is None:
+    st.info(
+        "Não encontrei o **ATP** no resultado. "
+        "Gere o MPS novamente (a página 06 costuma salvar `mps_detail['atp']`), "
+        "ou habilite o cálculo de ATP no seu core."
+    )
+else:
+    # 2) Tabela e teste de demanda extra
+    atp_df = pd.DataFrame({"Mês": atp_monthly.index, "ATP (unid/mês)": atp_monthly.values.astype(int)})
+    extra = st.number_input(
+        "Demanda extra hipotética (un/mês)",
+        min_value=0, step=1, value=0,
+        help="Valor fixo de nova demanda a testar em cada mês. O indicador mostra onde o ATP cobre."
+    )
+    atp_df["Atende?"] = (atp_df["ATP (unid/mês)"] >= int(extra))
+
+    st.dataframe(atp_df, use_container_width=True, height=280)
+
+    # 3) Gráfico (barras azul escuro) + linha da demanda extra
+    import altair as alt
+    bars = alt.Chart(atp_df).mark_bar(color="#1f3b73").encode(
+        x=alt.X("Mês:N", title="Mês"),
+        y=alt.Y("ATP (unid/mês):Q", title="ATP (unid/mês)"),
+        tooltip=["Mês", alt.Tooltip("ATP (unid/mês):Q", format=",.0f")]
+    )
+    line = alt.Chart(pd.DataFrame({"Mês": atp_df["Mês"], "Demanda extra": [extra]*len(atp_df)})).mark_rule(
+        color="#0f172a"  # azul mais escuro para a linha
+    ).encode(
+        x="Mês:N",
+        y="Demanda extra:Q",
+        tooltip=[alt.Tooltip("Demanda extra:Q", format=",.0f")]
+    )
+    st.altair_chart((bars + line).properties(height=260, width="container").interactive(), use_container_width=True)
+
+    # 4) Resumo curto
+    meses_ok = atp_df.loc[atp_df["Atende?"], "Mês"].tolist()
+    if extra > 0:
+        if meses_ok:
+            st.success(f"Com **{extra} un/mês** de demanda extra, os meses atendidos são: {', '.join(meses_ok)}.")
+        else:
+            st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP suficiente.")
+    else:
+        st.caption("Ajuste a demanda extra acima para testar cenários.")
+
 # ======================================================
 # TAB 4 — Recomendações (texto curto e objetivo)
 # ======================================================
