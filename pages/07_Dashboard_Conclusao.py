@@ -510,349 +510,287 @@ with tabs[2]:
         st.warning("Parâmetros inválidos para EPQ: é preciso **p > D** e **H > 0**. "
                    "Ajuste no **05_Inputs_MPS**.")
 
-# =============================
-# ATP — “dá pra atender novas demandas?”
-# =============================
-st.divider()
-st.markdown("## 🧮 ATP — Capacidade de atender novas demandas (por mês)")
+    # =============================
+    # ATP — “dá pra atender novas demandas?”
+    # =============================
+    st.divider()
+    st.markdown("## 🧮 ATP — Capacidade de atender novas demandas (por mês)")
 
-# 1) Obter ATP mensal (detail > atp  OU reconstruir de 'ATP(cum)' do display)
-mps_detail = st.session_state.get("mps_detail", None)
+    # 1) Obter ATP mensal (detail > atp  OU reconstruir de 'ATP(cum)' do display)
+    mps_detail = st.session_state.get("mps_detail", None)
 
-def _monthly_atp_from_cum(df_disp: pd.DataFrame) -> pd.Series | None:
-    try:
-        idx_norm = df_disp.index.astype(str).str.strip().str.lower()
-        m = (idx_norm == "atp(cum)".lower())
-        if not m.any():
+    def _monthly_atp_from_cum(df_disp: pd.DataFrame) -> pd.Series | None:
+        try:
+            idx_norm = df_disp.index.astype(str).str.strip().str.lower()
+            m = (idx_norm == "atp(cum)".lower())
+            if not m.any():
+                return None
+            row = df_disp.loc[df_disp.index[m][0]]
+            cum = pd.to_numeric(row.values, errors="coerce")
+            monthly = np.diff(np.r_[0, cum])
+            return pd.Series(np.clip(monthly, 0, None), index=df_disp.columns)
+        except Exception:
             return None
-        row = df_disp.loc[df_disp.index[m][0]]
-        cum = pd.to_numeric(row.values, errors="coerce")
-        monthly = np.diff(np.r_[0, cum])
-        return pd.Series(np.clip(monthly, 0, None), index=df_disp.columns)
-    except Exception:
-        return None
 
-if isinstance(mps_detail, pd.DataFrame) and ("atp" in mps_detail.columns):
-    atp_series = pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0)
-    labels = st.session_state["forecast_df"]["ds"].tolist()
-    PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
-    def _fmt(ts): 
-        ts = pd.to_datetime(ts); return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
-    col_labels = [_fmt(x) for x in labels]
-    atp_monthly = pd.Series(np.clip(atp_series.values, 0, None), index=col_labels)
-else:
-    atp_monthly = _monthly_atp_from_cum(mps_tbl_display)
-
-if atp_monthly is None:
-    st.info("Não encontrei o **ATP** no resultado. Gere o MPS novamente ou habilite o cálculo de ATP no core.")
-else:
-    # 2) Base e parâmetro de teste
-    atp_df = pd.DataFrame({"Mês": atp_monthly.index, "ATP (unid/mês)": atp_monthly.values.astype(int)})
-    extra = st.number_input(
-        "Demanda extra hipotética (un/mês)", min_value=0, step=1, value=0,
-        help="Valor fixo de nova demanda a testar em cada mês."
-    )
-    atp_df["Atende"] = atp_df["ATP (unid/mês)"] >= int(extra)
-
-    # 3) Gráfico (cores intuitivas + linha de referência + rótulos)
-    import altair as alt
-    chart_data = atp_df.copy()
-    chart_data["Demanda extra"] = extra
-
-    color_scale = alt.Scale(
-        domain=[True, False],
-        range=["#16a34a", "#dc2626"]  # verde / vermelho
-    )
-
-    bars = alt.Chart(chart_data).mark_bar().encode(
-        x=alt.X("Mês:N", title="Mês", sort=None),
-        y=alt.Y("ATP (unid/mês):Q", title="ATP (unid/mês)", scale=alt.Scale(nice=True, zero=True)),
-        color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
-        tooltip=["Mês", alt.Tooltip("ATP (unid/mês):Q", format=",.0f"), "Atende"]
-    )
-
-    labels = alt.Chart(chart_data).mark_text(
-        dy=-6, fontSize=11
-    ).encode(
-        x="Mês:N",
-        y=alt.Y("ATP (unid/mês):Q", stack=None),
-        text=alt.Text("ATP (unid/mês):Q", format=",.0f"),
-        color=alt.value("#111827")
-    )
-
-    threshold = alt.Chart(chart_data).mark_rule(color="#0f172a", strokeDash=[6,4]).encode(
-        x="Mês:N",
-        y="Demanda extra:Q",
-        tooltip=[alt.Tooltip("Demanda extra:Q", format=",.0f")]
-    )
-
-    st.altair_chart(
-        (bars + labels + threshold).properties(
-            height=340, width="container",
-            title=f"ATP por mês (linha = demanda extra: {extra} un/mês)"
-        ).configure_axis(labelFontSize=12, titleFontSize=12)
-         .configure_legend(labelFontSize=12, titleFontSize=12),
-        use_container_width=True
-    )
-
-    # 4) Espaço visual antes da tabela
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-    # 5) Tabela (com indicação visual)
-    atp_df["✔ Atende?"] = atp_df["Atende"].map({True:"✅", False:"❌"})
-    display_df = atp_df[["Mês", "ATP (unid/mês)", "✔ Atende?"]].rename(
-        columns={"ATP (unid/mês)":"ATP (unid/mês)"}
-    )
-    st.dataframe(display_df, use_container_width=True, height=280)
-
-    # 6) Resumo
-    if extra > 0:
-        meses_ok = display_df.loc[atp_df["Atende"], "Mês"].tolist()
-        if meses_ok:
-            st.success(f"Com **{extra} un/mês** de demanda extra, meses atendidos: {', '.join(meses_ok)}.")
-        else:
-            st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP suficiente.")
+    if isinstance(mps_detail, pd.DataFrame) and ("atp" in mps_detail.columns):
+        atp_series = pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0)
+        labels = st.session_state["forecast_df"]["ds"].tolist()
+        PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+        def _fmt(ts): 
+            ts = pd.to_datetime(ts); return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
+        col_labels = [_fmt(x) for x in labels]
+        atp_monthly = pd.Series(np.clip(atp_series.values, 0, None), index=col_labels)
     else:
-        st.caption("Ajuste a demanda extra acima para testar cenários.")
+        atp_monthly = _monthly_atp_from_cum(mps_tbl_display)
+
+    if atp_monthly is None:
+        st.info("Não encontrei o **ATP** no resultado. Gere o MPS novamente ou habilite o cálculo de ATP no core.")
+    else:
+        # 2) Base e parâmetro de teste
+        atp_df = pd.DataFrame({"Mês": atp_monthly.index, "ATP (unid/mês)": atp_monthly.values.astype(int)})
+        extra = st.number_input(
+            "Demanda extra hipotética (un/mês)", min_value=0, step=1, value=0,
+            help="Valor fixo de nova demanda a testar em cada mês."
+        )
+        atp_df["Atende"] = atp_df["ATP (unid/mês)"] >= int(extra)
+
+        # 3) Gráfico (cores intuitivas + linha de referência + rótulos)
+        import altair as alt
+        chart_data = atp_df.copy()
+        chart_data["Demanda extra"] = extra
+
+        color_scale = alt.Scale(
+            domain=[True, False],
+            range=["#16a34a", "#dc2626"]  # verde / vermelho
+        )
+
+        bars = alt.Chart(chart_data).mark_bar().encode(
+            x=alt.X("Mês:N", title="Mês", sort=None),
+            y=alt.Y("ATP (unid/mês):Q", title="ATP (unid/mês)", scale=alt.Scale(nice=True, zero=True)),
+            color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
+            tooltip=["Mês", alt.Tooltip("ATP (unid/mês):Q", format=",.0f"), "Atende"]
+        )
+
+        labels = alt.Chart(chart_data).mark_text(
+            dy=-6, fontSize=11
+        ).encode(
+            x="Mês:N",
+            y=alt.Y("ATP (unid/mês):Q", stack=None),
+            text=alt.Text("ATP (unid/mês):Q", format=",.0f"),
+            color=alt.value("#111827")
+        )
+
+        threshold = alt.Chart(chart_data).mark_rule(color="#0f172a", strokeDash=[6,4]).encode(
+            x="Mês:N",
+            y="Demanda extra:Q",
+            tooltip=[alt.Tooltip("Demanda extra:Q", format=",.0f")]
+        )
+
+        st.altair_chart(
+            (bars + labels + threshold).properties(
+                height=340, width="container",
+                title=f"ATP por mês (linha = demanda extra: {extra} un/mês)"
+            ).configure_axis(labelFontSize=12, titleFontSize=12)
+            .configure_legend(labelFontSize=12, titleFontSize=12),
+            use_container_width=True
+        )
+
+        # 4) Espaço visual antes da tabela
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+        # 5) Tabela (com indicação visual)
+        atp_df["✔ Atende?"] = atp_df["Atende"].map({True:"✅", False:"❌"})
+        display_df = atp_df[["Mês", "ATP (unid/mês)", "✔ Atende?"]].rename(
+            columns={"ATP (unid/mês)":"ATP (unid/mês)"}
+        )
+        st.dataframe(display_df, use_container_width=True, height=280)
+
+        # 6) Resumo
+        if extra > 0:
+            meses_ok = display_df.loc[atp_df["Atende"], "Mês"].tolist()
+            if meses_ok:
+                st.success(f"Com **{extra} un/mês** de demanda extra, meses atendidos: {', '.join(meses_ok)}.")
+            else:
+                st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP suficiente.")
+        else:
+            st.caption("Ajuste a demanda extra acima para testar cenários.")
 
 
 # ======================================================
-# TAB 4 — Recomendações (assistente de decisões)
+# TAB 4 — Recomendações (inteligentes e robustas)
 # ======================================================
 with tabs[3]:
     st.subheader("Recomendações")
 
-    # ---------- Helpers ----------
-    def _as_float(x, dv=0.0):
-        try:
-            if x is None: return float(dv)
-            if isinstance(x, str) and x.strip() == "": return float(dv)
-            return float(x)
-        except Exception:
-            return float(dv)
+    # ----------------- Helpers -----------------
+    import numpy as np
+    import pandas as pd
 
-    def _money(x, nd=2):
+    def _safe(v, nd=0):
         try:
-            return f"{float(x):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if np.isnan(v): return "—"
         except Exception:
-            return str(x)
+            pass
+        try:
+            return f"{float(v):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return str(v)
 
-    def _first_df(keys):
-        """Pega o primeiro DataFrame não vazio do session_state."""
+    def _get_df_from_state(keys: list[str]) -> pd.DataFrame | None:
         for k in keys:
-            obj = st.session_state.get(k)
+            obj = st.session_state.get(k, None)
             if isinstance(obj, pd.DataFrame) and not obj.empty:
                 return obj
         return None
 
-    def _series_from(df, candidates):
-        """Retorna a 1ª linha (Series) cujo índice case-insensitive casa com os candidates."""
-        if not isinstance(df, pd.DataFrame) or df.empty:
+    def _find_row(df: pd.DataFrame, candidates: list[str]):
+        if df is None: 
             return None
         idx_norm = df.index.astype(str).str.strip().str.lower()
         for cand in candidates:
             m = (idx_norm == cand.strip().lower())
             if m.any():
-                return df.loc[idx_norm[m].index[0]].astype(float)
+                pos = np.where(m)[0][0]
+                label = df.index[pos]
+                return df.loc[label]
         return None
 
-    # ---------- Carrega insumos ----------
-    mps_inputs  = st.session_state.get("mps_inputs", {}) or {}
-    mps_table   = _first_df(["mps_tbl_display", "mps_table"])
-    mps_detail  = st.session_state.get("mps_detail")
-    champion    = st.session_state.get("model_champion", {}) or st.session_state.get("champion", {})
+    # ----------------- Coletas seguras -----------------
+    recs: list[str] = []
 
-    time_base   = mps_inputs.get("time_base", "por mês")
-    A           = _as_float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)))
-    v           = _as_float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)))
-    D_base      = _as_float(mps_inputs.get("D", 0.0))
-    p_base      = _as_float(mps_inputs.get("p", 0.0))
-    h_mode      = mps_inputs.get("h_mode", "Informar H diretamente")
+    # Campeão de previsão (sMAPE)
+    # Aceita: variável 'champion' local OU em session_state ('forecast_champion' / 'champion')
+    _champ = locals().get("champion") or st.session_state.get("forecast_champion") or st.session_state.get("champion")
+    smape = None
+    if isinstance(_champ, dict):
+        smape = _champ.get("sMAPE") or _champ.get("smape") or _champ.get("SMAPE")
+
+    # MPS
+    mps_table = _get_df_from_state(["mps_tbl_display", "mps_table"])
+    # Inputs
+    mps_inputs = st.session_state.get("mps_inputs", {}) if isinstance(st.session_state.get("mps_inputs", {}), dict) else {}
+    lot_policy = (mps_inputs.get("lot_policy_default") or "").upper()  # "FX" ou "L4L"
+    lot_size   = int(mps_inputs.get("lot_size_default", 0) or 0)
+    initial_inv = int(mps_inputs.get("initial_inventory_default", 0) or 0)
+    lead_time  = int(mps_inputs.get("lead_time_default", 0) or 0)
+
+    # Parâmetros EPQ / custos
+    time_base  = mps_inputs.get("time_base", "por mês")
+    D          = float(mps_inputs.get("D", 0.0) or 0.0)
+    p          = float(mps_inputs.get("p", 0.0) or 0.0)
+    # Converter para mensal se base anual
+    if time_base == "por ano":
+        D_m = D / 12.0
+        p_m = p / 12.0
+    else:
+        D_m = D
+        p_m = p
+    # H mensal
+    h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
+    v = float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)) or 0.0)
     if h_mode == "Informar H diretamente":
-        H_in    = _as_float(mps_inputs.get("H", 0.0))
-        H_m     = H_in if time_base == "por mês" else (H_in/12.0)
+        H_m = float(mps_inputs.get("H", 0.0) or 0.0)
     else:
-        r_val   = _as_float(mps_inputs.get("r", 0.0))
-        H_m     = (r_val * v) if time_base == "por mês" else ((r_val * v)/12.0)
+        r = float(mps_inputs.get("r", 0.0) or 0.0)
+        H_m = r * v
+        if time_base == "por ano":
+            H_m = H_m / 12.0  # normaliza para mensal
 
-    pi_shortage = _as_float(mps_inputs.get("pi_shortage", mps_inputs.get("shortage_cost", 0.0)))
-
-    # Converte D,p para mensal se vieram anuais
-    D_m = D_base if time_base == "por mês" else (D_base/12.0)
-    p_m = p_base if time_base == "por mês" else (p_base/12.0)
-
-    HORIZ = max(1, (len(mps_table.columns) if isinstance(mps_table, pd.DataFrame) else 0))
-
-    lot_policy = mps_inputs.get("lot_policy_default", "FX")
-    Q_user     = _as_float(mps_inputs.get("lot_size_default", None), None) if lot_policy == "FX" else None
-
-    # Ruptura total (se existir linha)
-    row_rupt    = _series_from(mps_table, ["Ruptura", "falta", "backlog", "não atendido"])
-    total_rupt  = float(np.nansum(np.clip(row_rupt.values, 0, None))) if row_rupt is not None else 0.0
-
-    # ---------- Custos (cenário base) ----------
-    epq_ok = (p_m > D_m) and (H_m > 0)
-
-    if lot_policy == "FX" and Q_user and Q_user > 0:
-        C_setup_m = (A * D_m / Q_user)
-        C_hold_m  = (H_m * (Q_user/2.0) * max(0.0, (1.0 - (D_m/p_m)))) if epq_ok else 0.0
-    else:
-        # Estimativa para L4L: setups por mês = A * (#meses com liberação)/HORIZ ; holding ≈ H * estoque_médio+
-        row_mps   = _series_from(mps_table, ["Qtde. MPS", "qtde mps", "mps qty"])
-        row_stock = _series_from(mps_table, ["Estoque Proj.", "estoque projetado", "estoque"])
-        pedidos_m = int(np.nansum((row_mps.values > 0).astype(int))) if row_mps is not None else 0
-        media_est = float(np.nanmean(np.clip(row_stock.values, 0, None))) if row_stock is not None else 0.0
-        C_setup_m = A * (pedidos_m / HORIZ)
-        C_hold_m  = H_m * media_est
-
-    cost_setup = C_setup_m * HORIZ
-    cost_hold  = C_hold_m  * HORIZ
-    cost_rupt  = total_rupt * pi_shortage
-    cost_total = cost_setup + cost_hold + cost_rupt
-
-    # Q* (só para referência)
-    if epq_ok and A > 0:
-        try:
-            Q_star = np.sqrt((2.0 * A * D_m) / (H_m * (1.0 - D_m/p_m)))
-        except Exception:
-            Q_star = np.nan
-    else:
-        Q_star = np.nan
-
-    # ---------- Header KPIs ----------
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Custo total (R$)", _money(cost_total))
-    c2.metric("Holding no total", f"{(cost_hold/cost_total*100):.0f}%" if cost_total>0 else "—")
-    c3.metric("Q (usuário)", f"{int(Q_user)}" if (Q_user and lot_policy=="FX") else ("L4L" if lot_policy=="L4L" else "—"))
-    c4.metric("Q* (EPQ)", f"{int(round(Q_star))}" if not np.isnan(Q_star) else "—")
-
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-    # ---------- Cards de recomendações ----------
-    st.markdown("""
-    <style>
-      .rec-grid {display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; margin-top:8px;}
-      .rec-card {border:1px solid #e5e7eb; border-radius:12px; padding:12px 14px; background:#fff;}
-      .rec-title {font-weight:600; margin-bottom:6px;}
-      .rec-sub {color:#6b7280; font-size:0.9rem;}
-    </style>
-    """, unsafe_allow_html=True)
-
-    rec_html = []
-
-    if p_m <= D_m:
-        rec_html.append(
-            '<div class="rec-card"><div class="rec-title">⚠️ Capacidade insuficiente</div>'
-            '<div class="rec-sub">p ≤ D → EPQ inválido. Avalie nivelamento, aumento de p ou smoothing da demanda.</div></div>'
-        )
-
-    if not np.isnan(Q_star) and (Q_user and lot_policy=="FX"):
-        gap = (Q_user - Q_star)/Q_star
-        if abs(gap) >= 0.15:
-            sentido = "acima" if gap>0 else "abaixo"
-            rec_html.append(
-                f'<div class="rec-card"><div class="rec-title">📦 Lote {sentido} do ótimo</div>'
-                f'<div class="rec-sub">Q={int(Q_user)} está {abs(gap)*100:.0f}% {sentido} do Q*≈{int(round(Q_star))}. '
-                'Aproxime Q do ótimo para equilibrar setup × holding.</div></div>'
-            )
-
-    if cost_total > 0:
-        shares = {"Setup": cost_setup/cost_total, "Holding": cost_hold/cost_total, "Ruptura": cost_rupt/cost_total}
-        dom = max(shares, key=shares.get)
-        dica = {
-            "Holding": "Reduzir H (financeiro/armazenagem), negociar espaço, aproximar Q de Q*.",
-            "Setup": "Atacar A (SMED, padronização), avaliar lotes um pouco maiores.",
-            "Ruptura": "Elevar SS (z), antecipar produção nos meses críticos."
-        }[dom]
-        rec_html.append(
-            f'<div class="rec-card"><div class="rec-title">💡 Custo dominante: {dom}</div>'
-            f'<div class="rec-sub">{dica}</div></div>'
-        )
-
-    # ATP meses críticos
-    def _build_atp_df():
-        # prefere mps_detail['atp']; senão usa linha "ATP(cum)" da tabela e diferencia
-        if isinstance(mps_detail, pd.DataFrame) and "atp" in mps_detail.columns:
-            vals = mps_detail["atp"].astype(float).values
-            labs = mps_detail.index
-        elif isinstance(mps_table, pd.DataFrame):
-            atp_cum = _series_from(mps_table, ["ATP(cum)", "atp(cum)", "atp cum"])
-            if atp_cum is None: 
-                return None
-            cum  = atp_cum.values.astype(float)
-            vals = np.diff(np.r_[0, cum])
-            labs = mps_table.columns
+    # ----------------- Recomendações (Previsão) -----------------
+    if isinstance(smape, (int, float)):
+        if smape > 30:
+            recs.append("sMAPE **alto** → considere **aumentar base histórica**, tratar **outliers** e testar **modelos alternativos**.")
+        elif smape > 15:
+            recs.append("sMAPE **moderado** → vale ajustar **hiperparâmetros** e revisar **sazonalidades / regressoras**.")
         else:
-            return None
-        # rótulos PT
-        PT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
-        out = []
-        for c in pd.Index(labs):
+            recs.append("sMAPE **baixo** → mantenha a configuração e **monitore** periodicamente.")
+
+    # ----------------- Recomendações (MPS) -----------------
+    if isinstance(mps_table, pd.DataFrame):
+        cols = list(mps_table.columns)
+        # Estoque final
+        row_estoque = _find_row(mps_table, ["Estoque Proj.", "Estoque Projetado", "estoque proj.", "estoque"])
+        if row_estoque is not None and len(row_estoque.values):
+            estoque_final = float(row_estoque.values.astype(float)[-1])
+            if estoque_final < 0:
+                recs.append("**Estoque final negativo** no horizonte → **antecipar** produção/compras ou **rever lote/SS**.")
+            elif estoque_final == 0:
+                recs.append("**Estoque final zerado** → atenção a **rupturas** em caso de variação de demanda.")
+            else:
+                recs.append(f"**Estoque final**: {_safe(estoque_final,0)} un. — verificar se há **excesso** vs. meta de giro.")
+
+            # Pico de estoque vs demanda média (se disponível)
             try:
-                ts = pd.to_datetime(c)
-                out.append(f"{PT[ts.month-1]}/{ts.year%100:02d}")
+                fcst = st.session_state["forecast_df"][["y"]]
+                d_media = float(fcst["y"].mean()) if len(fcst) else None
             except Exception:
-                out.append(str(c))
-        return pd.DataFrame({"Mês": out, "ATP_mês": vals})
+                d_media = None
+            if d_media and d_media > 0:
+                est_max = float(np.nanmax(row_estoque.values.astype(float)))
+                if est_max > 3 * d_media:
+                    recs.append("**Picos de estoque** altos vs. demanda média → revisar **tamanho de lote**/política de reposição.")
 
-    atp_df = _build_atp_df()
-    if atp_df is not None and not atp_df.empty:
-        crit = atp_df.loc[atp_df["ATP_mês"] <= 0, "Mês"].tolist()
-        if crit:
-            rec_html.append(
-                f'<div class="rec-card"><div class="rec-title">📉 Risco de atendimento</div>'
-                f'<div class="rec-sub">Meses com ATP ≤ 0: {", ".join(crit[:4])}{"…" if len(crit)>4 else ""}. '
-                f'Considere antecipar liberações.</div></div>'
-            )
+        # Rupturas
+        row_rupt = _find_row(mps_table, ["Ruptura", "falta", "backlog", "não atendido"])
+        if row_rupt is not None:
+            rupt = np.clip(row_rupt.values.astype(float), 0, None)
+            if np.nansum(rupt) > 0:
+                meses_rupt = int(np.nansum(rupt > 0))
+                recs.append(f"**Rupturas** em {meses_rupt} mês(es) → considerar **aumentar SS**, **antecipar MPS** ou **rever lead time**.")
+            else:
+                recs.append("Sem **rupturas** projetadas no horizonte.")
 
-    if rec_html:
-        st.markdown('<div class="rec-grid">' + "".join(rec_html) + '</div>', unsafe_allow_html=True)
+        # Pedidos/Qtde MPS (para comentar política)
+        row_qtde = _find_row(mps_table, ["Qtde. MPS", "Qtde MPS", "quantidade mps", "mps qty"])
+        if row_qtde is not None:
+            qtd_mes = row_qtde.values.astype(float)
+            n_meses_com_pedido = int(np.nansum(qtd_mes > 0))
+            if lot_policy == "FX":
+                if n_meses_com_pedido > len(cols) * 0.8:
+                    recs.append("Com **FX**, há pedidos na maior parte dos meses → avalie **Q** maior para reduzir setups.")
+            elif lot_policy == "L4L":
+                if n_meses_com_pedido < len(cols) * 0.5:
+                    recs.append("Com **L4L**, há poucos meses com pedido → checar **congelamento**/capacidade (pode haver folga).")
+
+        # Congelamento
+        if mps_inputs.get("freeze_on", False):
+            fr = mps_inputs.get("frozen_range")
+            if isinstance(fr, (list, tuple)) and len(fr) == 2:
+                recs.append(f"**Horizonte congelado** de {fr[0]} → {fr[1]} — confirme que **não há mudanças** nesse intervalo.")
+
     else:
-        st.info("Sem alertas relevantes no cenário atual.")
+        recs.append("Gere o **MPS (página 06)** para habilitar recomendações operacionais.")
 
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    st.divider()
+    # ----------------- Recomendações (Políticas / Parâmetros) -----------------
+    # Condição EPQ e H
+    if p_m <= D_m:
+        recs.append("No EPQ requer **p > D**. Aumente a **capacidade p** ou reduza picos de demanda (alocação/nível de serviço).")
+    if H_m <= 0:
+        recs.append("**H mensal** não positivo → revise **H** (ou **r·v**) nos inputs; custo de manter deve ser > 0.")
 
-    # ---------- What-if de Q (não altera MPS) ----------
-    st.markdown("### What-if rápido de lote (Q)")
-    colW1, colW2 = st.columns([1.2, 1])
-    with colW1:
-        base_q = int(Q_user) if (Q_user and lot_policy=="FX") else (int(round(Q_star)) if not np.isnan(Q_star) else 100)
-        q_test = st.slider(
-            "Testar Q (apenas para análise de custos)",
-            max(1, base_q//2), base_q*2, base_q, step=1,
-            help="Usa fórmulas mensais de setup e holding; não recalcula o MPS."
-        )
-    with colW2:
-        if p_m > 0 and D_m > 0:
-            C_setup_m_test = A * D_m / q_test
-            C_hold_m_test  = H_m * (q_test/2.0) * max(0.0, (1.0 - (D_m/p_m))) if epq_ok else 0.0
-            delta = (C_setup_m_test + C_hold_m_test) * HORIZ - (cost_setup + cost_hold)
-            cor = "🟢" if delta < 0 else ("🟡" if abs(delta) < 1e-6 else "🔴")
-            st.metric("Δ Custo (setup+holding) no horizonte", _money(delta), help="Negativo = economia.")
-            st.caption(f"{cor} Setup: {_money(C_setup_m_test*HORIZ)} | Holding: {_money(C_hold_m_test*HORIZ)}")
+    # Lote e demanda média (se houver)
+    try:
+        fcst = st.session_state["forecast_df"][["y"]]
+        d_med = float(fcst["y"].mean()) if len(fcst) else None
+    except Exception:
+        d_med = None
+    if d_med and lot_policy == "FX" and lot_size > 0:
+        if lot_size < 0.5 * d_med:
+            recs.append("**Q (FX)** muito baixo vs. demanda média → muitos setups. Avalie **Q** maior.")
+        elif lot_size > 2.5 * d_med:
+            recs.append("**Q (FX)** muito alto vs. demanda média → estoque elevado. Avalie **Q** menor.")
 
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    st.divider()
-
-    # ---------- ATP mini-heatmap ----------
-    st.markdown("### ATP por mês (checagem rápida)")
-    if atp_df is not None and not atp_df.empty:
-        df_show = atp_df.copy()
-        df_show["Status"] = np.where(df_show["ATP_mês"] > 0, "OK", "Crítico")
-        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-        st.dataframe(
-            df_show.style.apply(
-                lambda s: ["background-color:#dcfce7" if val>0 else "background-color:#fee2e2"
-                           for val in df_show["ATP_mês"]],
-                axis=0
-            ),
-            use_container_width=True,
-            height=min(300, 40*(len(df_show)+1))
-        )
-        st.caption("Verde: ATP>0 (atende). Vermelho: ATP≤0 (não atende).")
+    # ----------------- Render -----------------
+    if recs:
+        st.markdown("\n".join(f"- {r}" for r in recs))
     else:
-        st.info("Não foi possível montar o ATP com os dados atuais.")
+        st.markdown("- Sem recomendações automáticas no momento.")
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-    st.page_link("pages/06_MPS.py", label="📅 Abrir/ajustar MPS", icon="🗓️")
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.page_link("pages/04_Previsao.py", label="🔁 Ajustar Previsão")
+    with c2:
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Inputs do MPS")
+    with c3:
+        st.page_link("pages/06_MPS.py", label="🗓️ Abrir MPS")
