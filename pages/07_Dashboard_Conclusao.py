@@ -617,38 +617,258 @@ else:
 
 
 # ======================================================
-# TAB 4 — Recomendações (texto curto e objetivo)
+# TAB 4 — Recomendações (assistente de decisões)
 # ======================================================
 with tabs[3]:
     st.subheader("Recomendações")
-    recs = []
 
-    # com base no campeão
-    if champion:
-        smape = champion.get("sMAPE")
-        if smape is not None and isinstance(smape, (int, float)):
-            if smape > 30:
-                recs.append("sMAPE alto → considerar **mais dados**, **tratamento de outliers** e/ou **outro modelo**.")
-            elif smape > 15:
-                recs.append("sMAPE moderado → ajuste fino de **hiperparâmetros** e checagem de **sazonalidade**.")
-            else:
-                recs.append("sMAPE baixo → manter configuração atual e acompanhar periodicamente.")
-
-    # sugestão de operação com MPS disponível
-    if isinstance(mps_tbl_display, pd.DataFrame) and not mps_tbl_display.empty:
+    # ----------------------------
+    # Helpers
+    # ----------------------------
+    def _as_float(x, dv=0.0):
         try:
-            estoque_final = int(mps_tbl_display.loc["Estoque Proj.", mps_tbl_display.columns[-1]])
-            if estoque_final < 0:
-                recs.append("Estoque projetado **negativo** no fim do horizonte → **antecipar** produção/compras.")
-            elif estoque_final == 0:
-                recs.append("Estoque projetado **zerado** no fim do horizonte → atenção a possíveis **rupturas**.")
+            if x is None: return float(dv)
+            if isinstance(x, str) and x.strip()=="":
+                return float(dv)
+            return float(x)
         except Exception:
-            pass
+            return float(dv)
 
-    if recs:
-        st.markdown("\n".join(f"- {r}" for r in recs))
+    def _money(x, nd=2):
+        try:
+            return f"{float(x):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return str(x)
+
+    def _safe_series(df, candidates):
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return None
+        idx = df.index.astype(str).str.strip().str.lower()
+        for cand in candidates:
+            m = (idx == cand.strip().lower())
+            if m.any():
+                return df.loc[idx[m].index[0]].astype(float)
+        return None
+
+    # ----------------------------
+    # Carrega insumos do estado
+    # ----------------------------
+    mps_inputs  = st.session_state.get("mps_inputs", {}) or {}
+    mps_table   = st.session_state.get("mps_tbl_display") or st.session_state.get("mps_table")
+    mps_detail  = st.session_state.get("mps_detail")  # se existir, ótimo; senão, seguimos só com mps_table
+    champion    = st.session_state.get("model_champion", {}) or st.session_state.get("champion", {})
+
+    # Parâmetros EPQ/inputs
+    time_base   = mps_inputs.get("time_base", "por mês")
+    A           = _as_float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)))
+    v           = _as_float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)))
+    D_base      = _as_float(mps_inputs.get("D", 0.0))        # coerente com base escolhida
+    p_base      = _as_float(mps_inputs.get("p", 0.0))
+    pi_shortage = _as_float(mps_inputs.get("pi_shortage", mps_inputs.get("shortage_cost", 0.0)))
+    h_mode      = mps_inputs.get("h_mode", "Informar H diretamente")
+    if h_mode == "Informar H diretamente":
+        H_in   = _as_float(mps_inputs.get("H", 0.0))
+        H_mensal = H_in if time_base=="por mês" else (H_in/12.0)
     else:
-        st.markdown("- Sem recomendações automáticas no momento.")
+        r_val    = _as_float(mps_inputs.get("r", 0.0))
+        H_mensal = (r_val * v) if time_base=="por mês" else ((r_val * v)/12.0)
+
+    # Converte D,p p/ mensal se vieram anuais
+    D_m = D_base if time_base=="por mês" else (D_base/12.0)
+    p_m = p_base if time_base=="por mês" else (p_base/12.0)
+
+    # Horizonte (nº de meses) — via tabela do MPS
+    HORIZ = len(mps_table.columns) if isinstance(mps_table, pd.DataFrame) else 0
+    HORIZ = max(1, HORIZ)
+
+    # Política/lote do usuário (Q_user se FX)
+    lot_policy = mps_inputs.get("lot_policy_default", "FX")
+    Q_user = _as_float(mps_inputs.get("lot_size_default", None), None) if lot_policy=="FX" else None
+
+    # Ruptura total (se existir na tabela)
+    row_rupt = _safe_series(mps_table, ["Ruptura", "falta", "backlog", "não atendido"])
+    total_rupt = float(np.nansum(np.clip(row_rupt.values, 0, None))) if row_rupt is not None else 0.0
+
+    # ----------------------------
+    # CUSTOS — cenário base (usando Q_user se houver; se L4L, usamos Qtde. MPS p/ contar setups e estoque)
+    # Fórmulas (mês):
+    #  - Setup (FX): C_setup,m = A * D / Q_user
+    #  - Manter (FX, EPQ): C_hold,m = H * (Q_user/2)*(1 - D/p), se p>D
+    #  - L4L: setup = A * (#meses com "Qtde. MPS" > 0) / HORIZ; manter ≈ H * média(Estoque Proj.⁺)
+    #  - Ruptura = Σ(Ruptura) * π  (no horizonte)
+    # ----------------------------
+    epq_ok = (p_m > D_m) and (H_mensal > 0)
+
+    if lot_policy == "FX" and Q_user and Q_user > 0:
+        C_setup_m = (A * D_m / Q_user)
+        C_hold_m  = (H_mensal * (Q_user/2.0) * max(0.0, (1.0 - (D_m/p_m)))) if epq_ok else 0.0
+    else:
+        # L4L/indefinido: estimativa a partir da tabela
+        row_mps    = _safe_series(mps_table, ["Qtde. MPS", "qtde mps", "mps qty"])
+        row_stock  = _safe_series(mps_table, ["Estoque Proj.", "estoque projetado", "estoque"])
+        pedidos_m  = int(np.nansum((row_mps.values > 0).astype(int))) if row_mps is not None else 0
+        media_est  = float(np.nanmean(np.clip(row_stock.values, 0, None))) if row_stock is not None else 0.0
+        C_setup_m  = A * (pedidos_m / HORIZ)
+        C_hold_m   = H_mensal * media_est
+
+    cost_setup   = C_setup_m  * HORIZ
+    cost_hold    = C_hold_m   * HORIZ
+    cost_rupt    = total_rupt * pi_shortage
+    cost_total   = cost_setup + cost_hold + cost_rupt
+
+    # ----------------------------
+    # Q* (EPQ) para comparação (se aplicável)
+    # ----------------------------
+    if epq_ok and A>0:
+        try:
+            fator = (1.0 - (D_m/p_m))
+            Q_star = np.sqrt((2.0*A*D_m) / (H_mensal * fator))
+        except Exception:
+            Q_star = np.nan
+    else:
+        Q_star = np.nan
+
+    # ----------------------------
+    # ATP — resumo de risco por mês
+    # ----------------------------
+    def _build_atp_df():
+        # Prioriza mps_detail['atp']; senão tenta linha "ATP(cum)" e diferencia
+        if isinstance(mps_detail, pd.DataFrame) and "atp" in mps_detail.columns:
+            vals = mps_detail["atp"].astype(float).values
+            idx  = mps_detail.index
+        elif isinstance(mps_table, pd.DataFrame):
+            atp_cum = _safe_series(mps_table, ["ATP(cum)", "atp(cum)", "atp cum"])
+            if atp_cum is not None:
+                cum = atp_cum.values.astype(float)
+                vals = np.diff(np.r_[0, cum])  # diferença
+                idx  = mps_table.columns
+            else:
+                return None
+        else:
+            return None
+        lab = []
+        PT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+        for c in pd.Index(idx):
+            try:
+                ts = pd.to_datetime(c)
+                lab.append(f"{PT[ts.month-1]}/{ts.year%100:02d}")
+            except Exception:
+                lab.append(str(c))
+        return pd.DataFrame({"Mês": lab, "ATP_mês": vals})
+
+    atp_df = _build_atp_df()
+
+    # ----------------------------
+    # HEADER com “quick KPIs”
+    # ----------------------------
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Custo total (R$)", _money(cost_total))
+    c2.metric("Holding no total", f"{(cost_hold/cost_total*100):.0f}%" if cost_total>0 else "—")
+    c3.metric("Q (usuário)", f"{int(Q_user)}" if (Q_user and lot_policy=="FX") else ("L4L" if lot_policy=="L4L" else "—"))
+    c4.metric("Q* (EPQ)", f"{int(round(Q_star))}" if not np.isnan(Q_star) else "—")
+
+    # ----------------------------
+    # CARDS de recomendações (regras simples)
+    # ----------------------------
+    st.markdown("""
+    <style>
+      .rec-grid {display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; margin-top:8px;}
+      .rec-card {border:1px solid #e5e7eb; border-radius:12px; padding:12px 14px; background:#fff;}
+      .rec-title {font-weight:600; margin-bottom:6px;}
+      .rec-sub {color:#6b7280; font-size:0.9rem;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    rec_html = []
+
+    # 1) Capacidade
+    if p_m <= D_m:
+        rec_html.append(
+            '<div class="rec-card"><div class="rec-title">⚠️ Capacidade insuficiente</div>'
+            '<div class="rec-sub">p ≤ D → EPQ inválido. Avalie nivelamento, aumento de p ou smoothing da demanda.</div></div>'
+        )
+
+    # 2) Lote vs Q*
+    if not np.isnan(Q_star) and (Q_user and lot_policy=="FX"):
+        gap = (Q_user - Q_star)/Q_star
+        if abs(gap) >= 0.15:
+            sentido = "acima" if gap>0 else "abaixo"
+            rec_html.append(
+                f'<div class="rec-card"><div class="rec-title">📦 Lote {sentido} do ótimo</div>'
+                f'<div class="rec-sub">Q={int(Q_user)} está {abs(gap)*100:.0f}% {sentido} do Q*≈{int(round(Q_star))}. '
+                'Aproxime Q do ótimo para equilibrar setup × holding.</div></div>'
+            )
+
+    # 3) Custo dominante
+    if cost_total>0:
+        shares = {"Setup":cost_setup/cost_total, "Holding":cost_hold/cost_total, "Ruptura":cost_rupt/cost_total}
+        dom = max(shares, key=shares.get)
+        dica = {
+            "Holding":"Reduzir H (financeiro/armazenagem), negociar espaço, aproximar Q de Q*.",
+            "Setup":"Atacar A (SMED, padronização), avaliar lotes um pouco maiores.",
+            "Ruptura":"Elevar SS (z), antecipar produção nos meses críticos."
+        }[dom]
+        rec_html.append(
+            f'<div class="rec-card"><div class="rec-title">💡 Custo dominante: {dom}</div>'
+            f'<div class="rec-sub">{dica}</div></div>'
+        )
+
+    # 4) ATP meses críticos
+    if atp_df is not None and not atp_df.empty:
+        crit = atp_df.loc[atp_df["ATP_mês"]<=0, "Mês"].tolist()
+        if crit:
+            rec_html.append(
+                f'<div class="rec-card"><div class="rec-title">📉 Risco de atendimento</div>'
+                f'<div class="rec-sub">Meses com ATP ≤ 0: {", ".join(crit[:4])}'
+                f'{"…" if len(crit)>4 else ""}. Considere antecipar liberações.</div></div>'
+            )
+
+    if rec_html:
+        st.markdown('<div class="rec-grid">' + "".join(rec_html) + '</div>', unsafe_allow_html=True)
+    else:
+        st.info("Sem alertas relevantes no cenário atual.")
 
     st.divider()
-    st.page_link("pages/06_MPS.py", label="📅 Abrir MPS", icon="🗓️")
+
+    # ----------------------------
+    # What-if rápido (teste de Q) – não recalcula MPS, só custos teóricos
+    # ----------------------------
+    st.markdown("### What-if rápido de lote (Q)")
+    colW1, colW2 = st.columns([1.2, 1])
+    with colW1:
+        base_q = int(Q_user) if (Q_user and lot_policy=="FX") else (int(round(Q_star)) if not np.isnan(Q_star) else 100)
+        q_test = st.slider("Testar Q (apenas para análise de custos)", max(1, base_q//2), base_q*2, base_q, step=1,
+                           help="Usa fórmulas de setup/holding por mês; não altera o MPS.")
+    with colW2:
+        if p_m > 0 and D_m > 0:
+            C_setup_m_test = A * D_m / q_test
+            C_hold_m_test  = H_mensal * (q_test/2.0) * max(0.0, (1.0 - (D_m/p_m))) if epq_ok else 0.0
+            delta = (C_setup_m_test + C_hold_m_test)*HORIZ - (cost_setup + cost_hold)
+            cor = "🟢" if delta < 0 else ("🟡" if abs(delta) < 1e-6 else "🔴")
+            st.metric("Δ Custo (setup+holding) no horizonte", _money(delta), help="Negativo é economia.")
+            st.caption(f"{cor} Setup: {_money(C_setup_m_test*HORIZ)} | Holding: {_money(C_hold_m_test*HORIZ)}")
+
+    st.divider()
+
+    # ----------------------------
+    # ATP — mini heatmap + legenda
+    # ----------------------------
+    st.markdown("### ATP por mês (checagem rápida)")
+    if atp_df is not None and not atp_df.empty:
+        df_show = atp_df.copy()
+        df_show["Status"] = np.where(df_show["ATP_mês"]>0, "OK", "Crítico")
+        # espaço visual
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+        st.dataframe(
+            df_show.style.apply(
+                lambda s: ["background-color:#dcfce7" if (val>0) else "background-color:#fee2e2"
+                           for val in df_show["ATP_mês"]],
+                axis=0
+            ),
+            use_container_width=True, height=min(300, 40*(len(df_show)+1))
+        )
+        st.caption("Verde: ATP>0 (atende). Vermelho: ATP≤0 (não atende).")
+    else:
+        st.info("Não foi possível montar o ATP com os dados atuais.")
+
+
