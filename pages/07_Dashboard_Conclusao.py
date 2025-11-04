@@ -402,7 +402,7 @@ with tabs[2]:
         a1, a2, a3, a4 = st.columns(4)
         a1.metric("A (setup)", _safe(A, 2))
         a2.metric("v (valor unit.)", _safe(v, 2))
-        a3.metric("H_mensal (R$/un·mês)", _safe(H_m, 4))
+        a3.metric("H mensal (R$/un·mês)", _safe(H_m, 4))
         a4.metric("π (ruptura)", _safe(pi_shortage, 2))
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("D (unid/mês)", _safe(D_m, 2))
@@ -411,8 +411,8 @@ with tabs[2]:
         b4.metric("Q* (EPQ)", _safe(Q_star, 2))
 
         st.latex(r"Q^* = \sqrt{\frac{2AD}{H(1-D/p)}}")
-        st.latex(r"I_{médio} = \frac{Q}{2}\left(1 - \frac{D}{p}\right)")
-        st.latex(r"C_{setup} = \frac{AD}{Q}, \quad C_{hold} = H \cdot I_{médio}")
+        st.latex(r"C_{manter estoque} = \frac{Q}{2}\left(1 - \frac{D}{p}\right)")
+        st.latex(r"C_{setup} = \frac{AD}{Q}, \quad C_{ruptura} = \sum (Ruptura) \times \pi")
         st.caption("Custos acima são **por mês**; multiplicamos pelo **nº de meses do horizonte**.")
 
     # ---------- Layout visual ----------
