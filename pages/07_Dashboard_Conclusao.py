@@ -857,7 +857,7 @@ with tabs[3]:
         st.metric("Custo de manter (R$)", _safe(cost_hold_total, 2), help="H × (Q/2) × (1 − D/p) × meses  +  H × SS_extra × meses")
         st.metric("Total (R$)", _safe(cost_total_sim, 2))
     with R:
-        st.markdown("####Parâmetros aplicados:")
+        st.markdown("**Parâmetros aplicados:**")
         st.write(f"- Q = {_safe(Q_user,0)} un")
         st.write(f"- A = R\$ {_safe(A_lbl,2)}; H = R\$ {_safe(H_lbl,4)} /un·mês")
         st.write(f"- D = {_safe(D_lbl,2)} un/mês; p = {_safe(p_lbl,2)} un/mês")
