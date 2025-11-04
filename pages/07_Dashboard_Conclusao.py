@@ -287,17 +287,35 @@ with tabs[1]:
         )
 
 
-# =========================
-# TAB 3 — MPS (custos & resumo, sem tabela)
-# =========================
+# ======================================================
+# TAB 3 — MPS & Custos (somente leitura dos inputs)
+# ======================================================
 with tabs[2]:
-    import numpy as np
-    import pandas as pd
+    st.subheader("MPS — Custos e Resumo (somente leitura dos inputs)")
 
-    st.subheader("MPS — Custos e Resumo")
+    # ---------- Guardas ----------
+    mps_inputs = st.session_state.get("mps_inputs", {})
+    if not isinstance(mps_inputs, dict) or not mps_inputs:
+        st.info("Não encontrei os **inputs do MPS**. Preencha e salve na página **05_Inputs_MPS**.")
+        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para 05_Inputs_MPS (preencher custos)")
+        st.stop()
 
-    # ---------- helpers ----------
-    def _fmt(v, nd=0):
+    # Busca segura da tabela do MPS (pode estar salva com nomes diferentes)
+    def _get_df_from_state(keys: list[str]):
+        for k in keys:
+            obj = st.session_state.get(k, None)
+            if isinstance(obj, pd.DataFrame) and not obj.empty:
+                return obj
+        return None
+
+    mps_tbl_display = _get_df_from_state(["mps_tbl_display", "mps_table"])
+    if mps_tbl_display is None:
+        st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte.")
+        st.page_link("pages/06_MPS.py", label="📅 Ir para 06_MPS (Plano Mestre de Produção)")
+        st.stop()
+
+    # ---------- Helpers ----------
+    def _safe(v, nd=0):
         try:
             if np.isnan(v): return "—"
         except Exception:
@@ -307,172 +325,86 @@ with tabs[2]:
         except Exception:
             return str(v)
 
-    def _num(dct, key, fb=0.0):
-        v = dct.get(key, None)
-        if v is None: return float(fb)
-        try:
-            if isinstance(v, (np.floating, np.integer)): return float(v)
-            if hasattr(v, "item"): return float(v.item())
-            if isinstance(v, str):
-                s = v.strip().replace(".", "").replace(",", ".")
-                return float(s) if s else float(fb)
-            return float(v)
-        except Exception:
-            return float(fb)
-
-    def _find_row(df: pd.DataFrame, names: list[str]):
-        idx = df.index.astype(str).str.strip().str.lower()
-        for cand in names:
-            c = str(cand).strip().lower()
-            eq = (idx == c)
-            if eq.any(): return df.iloc[int(np.where(eq)[0][0])]
-            ct = idx.str.contains(c, regex=False)
-            if ct.any(): return df.iloc[int(np.where(ct)[0][0])]
+    def _find_row(df: pd.DataFrame, candidates: list[str]):
+        """Encontra uma linha pelo nome (case-insensitive, tolerante) e retorna a Series."""
+        idx_norm = df.index.astype(str).str.strip().str.lower()
+        for cand in candidates:
+            m = (idx_norm == cand.strip().lower())
+            if m.any():
+                pos = np.where(m)[0][0]
+                label = df.index[pos]
+                return df.loc[label]
         return None
 
-    # ---------- entrada necessária ----------
-    mps_inputs = st.session_state.get("mps_inputs", {})
-    if not isinstance(mps_inputs, dict) or not mps_inputs:
-        st.info("Preencha e salve os **inputs de custos** na página 05_Inputs_MPS.")
-        st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para 05_Inputs_MPS")
-        st.stop()
+    # ---------- Linhas usadas ----------
+    row_qtde_mps  = _find_row(mps_tbl_display, ["Qtde. MPS", "qtde mps", "quantidade mps", "mps qty"])
+    row_estoque   = _find_row(mps_tbl_display, ["Estoque Proj.", "estoque projetado", "estoque"])
+    row_ruptura   = _find_row(mps_tbl_display, ["Ruptura", "falta", "backlog", "não atendido"])
 
-    mps_tbl_display = st.session_state.get("mps_tbl_display") or st.session_state.get("mps_table")
-    if not isinstance(mps_tbl_display, pd.DataFrame) or mps_tbl_display.empty:
-        st.info("Gere o **MPS** na página 06_MPS e volte aqui.")
-        st.page_link("pages/06_MPS.py", label="📅 Ir para 06_MPS (Plano Mestre de Produção)")
-        st.stop()
+    total_prod = float(np.nansum(row_qtde_mps.values.astype(float))) if row_qtde_mps is not None else 0.0
+    order_count = int(np.nansum((row_qtde_mps.values.astype(float) > 0).astype(int))) if row_qtde_mps is not None else 0
+    estoque_mes = row_estoque.values.astype(float) if row_estoque is not None else np.zeros(len(mps_tbl_display.columns))
+    total_estoque = float(np.nansum(np.clip(estoque_mes, 0, None)))
+    total_ruptura = float(np.nansum(np.clip(row_ruptura.values.astype(float), 0, None))) if row_ruptura is not None else 0.0
+    estoque_final = float(estoque_mes[-1]) if estoque_mes.size else np.nan
 
-    # ---------- custos (EPQ) ----------
-    time_base = mps_inputs.get("time_base", "por mês")  # "por mês" | "por ano"
+    # ---------- Lê custos a partir dos inputs ----------
+    # v é obrigatório nos inputs (já garantimos na página 05_Inputs_MPS)
+    v = float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)))
+    A = float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)))  # custo por setup/encomenda
+    time_base = mps_inputs.get("time_base", "por mês")                  # "por mês" ou "por ano"
+    h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
+    H_direct = mps_inputs.get("H", None)   # pode ser None
+    r = mps_inputs.get("r", None)          # pode ser None
+    pi_shortage = float(mps_inputs.get("pi_shortage", mps_inputs.get("shortage_cost", 0.0)))
 
-    # v (custo unitário) com fallback legado
-    v = _num(mps_inputs, "v", _num(mps_inputs, "unit_cost", 0.0))
-    A = _num(mps_inputs, "A", _num(mps_inputs, "order_cost", 0.0))                 # custo por setup/pedido
-    pi = _num(mps_inputs, "pi_shortage", _num(mps_inputs, "shortage_cost", 0.0))   # custo de ruptura por unid
-
-    # H mensal: direto ou r·v; se anual, converte p/ mês
-    H_direct = mps_inputs.get("H", None)
-    r_val = mps_inputs.get("r", None)
-    if H_direct is not None:
-        H = _num(mps_inputs, "H", 0.0)
-        H_m = H if time_base == "por mês" else (H / 12.0)
-        origem_H = "H informado"
-    elif r_val is not None:
-        r = _num(mps_inputs, "r", 0.0)
-        r_m = r if time_base == "por mês" else (r / 12.0)
-        H_m = r_m * v
-        origem_H = "H = r · v"
+    # Converte H para base mensal:
+    # - Se usuário informou H: ele está na base escolhida. H_mensal = H (mês) ou H/12 (ano).
+    # - Se usuário informou r: H = r * v na base escolhida. H_mensal = (r*v) (mês) ou (r*v)/12 (ano).
+    if h_mode == "Informar H diretamente":
+        H_mensal = float(H_direct or 0.0)
+        if time_base == "por ano":
+            H_mensal = H_mensal / 12.0
     else:
-        # compatibilidade com “holding_rate” (%/mês)
-        holding_rate_pct = _num(mps_inputs, "holding_rate", 0.0)
-        H_m = (holding_rate_pct / 100.0) * v
-        origem_H = "H = (holding_rate%/mês) · v"
+        r_val = float(r or 0.0)
+        H_calc = r_val * v
+        H_mensal = H_calc if time_base == "por mês" else (H_calc / 12.0)
 
-    # ---------- extrai linhas-chave do MPS ----------
-    row_receipts = _find_row(mps_tbl_display, ["Qtde. MPS", "Qtde MPS", "Quantidade MPS", "planned order receipts"])
-    row_releases = _find_row(mps_tbl_display, ["Início MPS", "Releases", "planned order releases"])
-    row_stock    = _find_row(mps_tbl_display, ["Estoque Proj.", "Estoque Projetado", "projected", "on hand"])
-    row_shortage = _find_row(mps_tbl_display, ["Ruptura", "Falta", "Backlog", "Não atendido", "shortage"])
+    # ---------- Cálculo dos custos ----------
+    cost_produzir   = total_prod * v                          # Σ(Qtde. MPS) * v
+    cost_encomendar = order_count * A                         # nº períodos com pedido * A
+    cost_manter     = total_estoque * H_mensal                # Σ(Estoque do mês) * H_mensal
+    cost_ruptura    = total_ruptura * pi_shortage             # Σ(Ruptura) * π
+    cost_total      = cost_produzir + cost_encomendar + cost_manter + cost_ruptura
 
-    # produção total: preferir receipts; se não houver, usar releases
-    if row_receipts is not None:
-        prod_series = row_receipts.values.astype(float)
-    elif row_releases is not None:
-        prod_series = row_releases.values.astype(float)
-    else:
-        prod_series = np.zeros(len(mps_tbl_display.columns))
+    # ---------- Layout (sem tabela) ----------
+    st.markdown("### KPIs principais")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Estoque final (último mês)", _safe(estoque_final, 0))
+    k2.metric("Total produzido (Σ Qtde. MPS)", _safe(total_prod, 0))
+    k3.metric("Meses com pedido (contagem)", f"{order_count:d}")
+    k4.metric("Ruptura (Σ unidades)", _safe(total_ruptura, 0))
 
-    total_prod   = float(np.nansum(np.clip(prod_series, 0, None)))
-    order_count  = int(np.nansum((prod_series > 0).astype(int)))
-    stock_series = row_stock.values.astype(float) if row_stock is not None else np.zeros(len(mps_tbl_display.columns))
-    total_stock  = float(np.nansum(np.clip(stock_series, 0, None)))
-    estoque_fin  = float(stock_series[-1]) if stock_series.size else np.nan
-    total_short  = float(np.nansum(np.clip(row_shortage.values.astype(float), 0, None))) if row_shortage is not None else 0.0
+    st.markdown("### Decomposição de custos")
+    cA, cB = st.columns(2)
+    with cA:
+        st.metric("Custo de produzir (R$)", _safe(cost_produzir, 2))
+        st.metric("Custo de manter (R$)", _safe(cost_manter, 2))
+    with cB:
+        st.metric("Custo de encomendar (R$)", _safe(cost_encomendar, 2))
+        st.metric("Custo de ruptura (R$)", _safe(cost_ruptura, 2))
 
-    # ---------- custos ----------
-    custo_produzir   = total_prod * v
-    custo_encomendar = order_count * A
-    custo_manter     = total_stock * H_m
-    custo_ruptura    = total_short * pi
-    custo_total      = custo_produzir + custo_encomendar + custo_manter + custo_ruptura
+    st.markdown("#### Custo relevante total")
+    st.metric("Total (R$)", _safe(cost_total, 2))
 
-    # ---------- avisos úteis ----------
-    if v <= 0:
-        st.warning("**Custo unitário (v)** está 0. Defina em 05_Inputs_MPS (seção EPQ) para calcular corretamente o **Custo de produzir**.")
-    if total_prod <= 0:
-        st.info("A produção total está 0 neste horizonte (não encontrei 'Qtde. MPS' nem 'Início MPS' com valores positivos).")
-
-    # ---------- layout: cards 2×2 + total ----------
-    st.markdown("""
-    <style>
-    .kcards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:6px;}
-    .kcard{border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;background:#fafafa;}
-    .kcard h4{margin:0 0 6px 0;font-size:0.95rem;color:#374151;}
-    .kval{font-size:1.6rem;font-weight:700;line-height:1.1;margin-bottom:4px;}
-    .kdesc{color:#6b7280;font-size:0.85rem;}
-    .ktotal{border:2px solid #111827;background:#111827;color:#fff;border-radius:16px;padding:16px 18px;margin-top:10px;}
-    .ktotal .kval{font-size:1.8rem;}
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="kcards">', unsafe_allow_html=True)
-    st.markdown(f'''
-        <div class="kcard">
-            <h4>Custo de produzir</h4>
-            <div class="kval">R$ {_fmt(custo_produzir, 2)}</div>
-            <div class="kdesc">Σ(quantidade produzida) × <b>v</b></div>
-        </div>
-    ''', unsafe_allow_html=True)
-    st.markdown(f'''
-        <div class="kcard">
-            <h4>Custo de encomendar</h4>
-            <div class="kval">R$ {_fmt(custo_encomendar, 2)}</div>
-            <div class="kdesc">nº de meses com pedido × <b>A</b></div>
-        </div>
-    ''', unsafe_allow_html=True)
-    st.markdown(f'''
-        <div class="kcard">
-            <h4>Custo de manter</h4>
-            <div class="kval">R$ {_fmt(custo_manter, 2)}</div>
-            <div class="kdesc">Σ(estoque mensal) × <b>H</b> (mensal)</div>
-        </div>
-    ''', unsafe_allow_html=True)
-    st.markdown(f'''
-        <div class="kcard">
-            <h4>Custo de ruptura</h4>
-            <div class="kval">R$ {_fmt(custo_ruptura, 2)}</div>
-            <div class="kdesc">Σ(unid. não atendidas) × <b>π</b></div>
-        </div>
-    ''', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown(f'''
-        <div class="ktotal">
-            <h4 style="margin:0 0 6px 0;">Custo relevante total</h4>
-            <div class="kval">R$ {_fmt(custo_total, 2)}</div>
-            <div class="kdesc">Produzir + Encomendar + Manter + Ruptura</div>
-        </div>
-    ''', unsafe_allow_html=True)
-
-    # ---------- KPIs de apoio ----------
-    st.markdown("### Indicadores do horizonte")
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Total produzido", _fmt(total_prod, 0))
-    k2.metric("Meses com pedido", f"{order_count:d}")
-    k3.metric("Estoque final", _fmt(estoque_fin, 0))
-
-    # ---------- como calculamos ----------
-    st.markdown("### Como calculamos")
-    bullets = [
-        f"**Custo de produzir** = Σ(Qtde. produzida) × **v** = {_fmt(total_prod,0)} × R$ {_fmt(v,2)} = **R$ {_fmt(custo_produzir,2)}**.",
-        f"**Custo de encomendar** = nº de meses com pedido × **A** = {order_count} × R$ {_fmt(A,2)} = **R$ {_fmt(custo_encomendar,2)}**.",
-        f"**Custo de manter** = Σ(estoque mensal) × **H** (mensal). **H (mensal)** veio de **{origem_H}**; H(mês) = R$ {_fmt(H_m,2)}.",
-        f"**Custo de ruptura** = Σ(rupturas) × **π** = {_fmt(total_short,0)} × R$ {_fmt(pi,2)} = **R$ {_fmt(custo_ruptura,2)}**.",
-    ]
-    st.markdown("- " + "\n- ".join(bullets))
-
-
+    st.caption(
+        "Como calculamos: "
+        "• **Produzir** = Σ(Qtde. MPS) × **v**. "
+        "• **Encomendar** = (nº de períodos com pedido) × **A**. "
+        "• **Manter** = Σ(Estoque do mês) × **H_mensal** (se você informou **H** por ano, dividimos por 12; "
+        "se informou **r**, usamos **H = r·v** e aplicamos a mesma conversão). "
+        "• **Ruptura** = Σ(Ruptura) × **π**."
+    )
 
 # ======================================================
 # TAB 4 — Recomendações (texto curto e objetivo)
