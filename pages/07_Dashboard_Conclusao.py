@@ -617,15 +617,17 @@ with tabs[2]:
 
 
 # ======================================================
-# TAB 4 — Recomendações (inteligentes e robustas)
+# TAB 4 — Recomendações + “What-if” de Q (FX)
 # ======================================================
 with tabs[3]:
+    import numpy as np
+    import pandas as pd
+    import altair as alt
+    import streamlit as st
+
     st.subheader("Recomendações")
 
     # ----------------- Helpers -----------------
-    import numpy as np
-    import pandas as pd
-
     def _safe(v, nd=0):
         try:
             if np.isnan(v): return "—"
@@ -658,133 +660,273 @@ with tabs[3]:
     # ----------------- Coletas seguras -----------------
     recs: list[str] = []
 
-    # Campeão de previsão (sMAPE)
-    # Aceita: variável 'champion' local OU em session_state ('forecast_champion' / 'champion')
+    # Campeão de previsão (sMAPE), se existir
     _champ = locals().get("champion") or st.session_state.get("forecast_champion") or st.session_state.get("champion")
     smape = None
     if isinstance(_champ, dict):
         smape = _champ.get("sMAPE") or _champ.get("smape") or _champ.get("SMAPE")
 
-    # MPS
+    # MPS exibido (para comparação e métricas)
     mps_table = _get_df_from_state(["mps_tbl_display", "mps_table"])
-    # Inputs
+
+    # Inputs do MPS
     mps_inputs = st.session_state.get("mps_inputs", {}) if isinstance(st.session_state.get("mps_inputs", {}), dict) else {}
     lot_policy = (mps_inputs.get("lot_policy_default") or "").upper()  # "FX" ou "L4L"
-    lot_size   = int(mps_inputs.get("lot_size_default", 0) or 0)
+    Q_fx       = int(mps_inputs.get("lot_size_default", 0) or 0)
     initial_inv = int(mps_inputs.get("initial_inventory_default", 0) or 0)
-    lead_time  = int(mps_inputs.get("lead_time_default", 0) or 0)
+    lead_time   = int(mps_inputs.get("lead_time_default", 0) or 0)
 
-    # Parâmetros EPQ / custos
+    # Parâmetros de custos (normalizados para MÊS)
     time_base  = mps_inputs.get("time_base", "por mês")
-    D          = float(mps_inputs.get("D", 0.0) or 0.0)
-    p          = float(mps_inputs.get("p", 0.0) or 0.0)
-    # Converter para mensal se base anual
+    A          = float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)) or 0.0)
+    D_in       = float(mps_inputs.get("D", 0.0) or 0.0)
+    p_in       = float(mps_inputs.get("p", 0.0) or 0.0)
     if time_base == "por ano":
-        D_m = D / 12.0
-        p_m = p / 12.0
+        D_m = D_in / 12.0
+        p_m = p_in / 12.0
     else:
-        D_m = D
-        p_m = p
-    # H mensal
-    h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
+        D_m = D_in
+        p_m = p_in
+
     v = float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)) or 0.0)
+    h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
     if h_mode == "Informar H diretamente":
         H_m = float(mps_inputs.get("H", 0.0) or 0.0)
     else:
         r = float(mps_inputs.get("r", 0.0) or 0.0)
         H_m = r * v
         if time_base == "por ano":
-            H_m = H_m / 12.0  # normaliza para mensal
+            H_m = H_m / 12.0
 
-    # ----------------- Recomendações (Previsão) -----------------
+    pi_shortage = float(mps_inputs.get("pi_shortage", mps_inputs.get("shortage_cost", 0.0)) or 0.0)
+
+    # Horizonte (nº de meses) — tenta MPS; se não houver, usa previsão
+    if isinstance(mps_table, pd.DataFrame):
+        HORIZ_MESES = max(1, len(mps_table.columns))
+    elif "forecast_df" in st.session_state:
+        HORIZ_MESES = max(1, len(st.session_state["forecast_df"]))
+    else:
+        HORIZ_MESES = 6  # fallback visual
+
+    # ----------------- Recomendações automáticas -----------------
     if isinstance(smape, (int, float)):
         if smape > 30:
-            recs.append("sMAPE **alto** → considere **aumentar base histórica**, tratar **outliers** e testar **modelos alternativos**.")
+            recs.append("sMAPE **alto** → considere **aumentar histórico**, tratar **outliers** e testar **modelos alternativos**.")
         elif smape > 15:
-            recs.append("sMAPE **moderado** → vale ajustar **hiperparâmetros** e revisar **sazonalidades / regressoras**.")
+            recs.append("sMAPE **moderado** → ajuste **hiperparâmetros** e revise **sazonalidades/regressoras**.")
         else:
             recs.append("sMAPE **baixo** → mantenha a configuração e **monitore** periodicamente.")
 
-    # ----------------- Recomendações (MPS) -----------------
     if isinstance(mps_table, pd.DataFrame):
-        cols = list(mps_table.columns)
-        # Estoque final
-        row_estoque = _find_row(mps_table, ["Estoque Proj.", "Estoque Projetado", "estoque proj.", "estoque"])
-        if row_estoque is not None and len(row_estoque.values):
-            estoque_final = float(row_estoque.values.astype(float)[-1])
-            if estoque_final < 0:
-                recs.append("**Estoque final negativo** no horizonte → **antecipar** produção/compras ou **rever lote/SS**.")
-            elif estoque_final == 0:
-                recs.append("**Estoque final zerado** → atenção a **rupturas** em caso de variação de demanda.")
-            else:
-                recs.append(f"**Estoque final**: {_safe(estoque_final,0)} un. — verificar se há **excesso** vs. meta de giro.")
-
-            # Pico de estoque vs demanda média (se disponível)
-            try:
-                fcst = st.session_state["forecast_df"][["y"]]
-                d_media = float(fcst["y"].mean()) if len(fcst) else None
-            except Exception:
-                d_media = None
-            if d_media and d_media > 0:
-                est_max = float(np.nanmax(row_estoque.values.astype(float)))
-                if est_max > 3 * d_media:
-                    recs.append("**Picos de estoque** altos vs. demanda média → revisar **tamanho de lote**/política de reposição.")
-
-        # Rupturas
+        row_est = _find_row(mps_table, ["Estoque Proj.", "Estoque Projetado", "estoque"])
         row_rupt = _find_row(mps_table, ["Ruptura", "falta", "backlog", "não atendido"])
+        row_qtd = _find_row(mps_table, ["Qtde. MPS", "Qtde MPS", "quantidade mps", "mps qty"])
+
+        if row_est is not None and len(row_est.values):
+            estoque_final = float(row_est.values.astype(float)[-1])
+            if estoque_final < 0:
+                recs.append("**Estoque final negativo** → **antecipar** produção/compras ou **elevar SS**.")
+            elif estoque_final == 0:
+                recs.append("**Estoque final zerado** → atenção a **rupturas** com qualquer desvio.")
+            else:
+                recs.append(f"**Estoque final**: {_safe(estoque_final,0)} un. — confira se há **excesso** vs. meta de giro.")
+
         if row_rupt is not None:
             rupt = np.clip(row_rupt.values.astype(float), 0, None)
             if np.nansum(rupt) > 0:
                 meses_rupt = int(np.nansum(rupt > 0))
-                recs.append(f"**Rupturas** em {meses_rupt} mês(es) → considerar **aumentar SS**, **antecipar MPS** ou **rever lead time**.")
+                recs.append(f"**Rupturas** em {meses_rupt} mês(es) → elevar **SS**, **antecipar MPS** ou **reduzir lead time**.")
             else:
                 recs.append("Sem **rupturas** projetadas no horizonte.")
 
-        # Pedidos/Qtde MPS (para comentar política)
-        row_qtde = _find_row(mps_table, ["Qtde. MPS", "Qtde MPS", "quantidade mps", "mps qty"])
-        if row_qtde is not None:
-            qtd_mes = row_qtde.values.astype(float)
+        if row_qtd is not None:
+            qtd_mes = row_qtd.values.astype(float)
             n_meses_com_pedido = int(np.nansum(qtd_mes > 0))
-            if lot_policy == "FX":
-                if n_meses_com_pedido > len(cols) * 0.8:
-                    recs.append("Com **FX**, há pedidos na maior parte dos meses → avalie **Q** maior para reduzir setups.")
-            elif lot_policy == "L4L":
-                if n_meses_com_pedido < len(cols) * 0.5:
-                    recs.append("Com **L4L**, há poucos meses com pedido → checar **congelamento**/capacidade (pode haver folga).")
-
-        # Congelamento
-        if mps_inputs.get("freeze_on", False):
-            fr = mps_inputs.get("frozen_range")
-            if isinstance(fr, (list, tuple)) and len(fr) == 2:
-                recs.append(f"**Horizonte congelado** de {fr[0]} → {fr[1]} — confirme que **não há mudanças** nesse intervalo.")
-
+            if lot_policy == "FX" and len(qtd_mes) > 0:
+                if n_meses_com_pedido > 0.8 * len(qtd_mes):
+                    recs.append("Com **FX**, há pedidos na maioria dos meses → teste **Q** maior para reduzir setups.")
+            if lot_policy == "L4L" and len(qtd_mes) > 0:
+                if n_meses_com_pedido < 0.5 * len(qtd_mes):
+                    recs.append("Com **L4L**, poucos meses com pedido → verifique **congelamento**/capacidade (pode haver folga).")
     else:
         recs.append("Gere o **MPS (página 06)** para habilitar recomendações operacionais.")
 
-    # ----------------- Recomendações (Políticas / Parâmetros) -----------------
-    # Condição EPQ e H
+    # Condições básicas do EPQ (para usar fórmulas de manter)
     if p_m <= D_m:
-        recs.append("No EPQ requer **p > D**. Aumente a **capacidade p** ou reduza picos de demanda (alocação/nível de serviço).")
+        recs.append("Para EPQ é necessário **p > D** (capacidade maior que a demanda).")
     if H_m <= 0:
-        recs.append("**H mensal** não positivo → revise **H** (ou **r·v**) nos inputs; custo de manter deve ser > 0.")
+        recs.append("**H (custo de manter)** deve ser positivo. Revise **H** (ou **r·v**) nos inputs.")
 
-    # Lote e demanda média (se houver)
-    try:
-        fcst = st.session_state["forecast_df"][["y"]]
-        d_med = float(fcst["y"].mean()) if len(fcst) else None
-    except Exception:
-        d_med = None
-    if d_med and lot_policy == "FX" and lot_size > 0:
-        if lot_size < 0.5 * d_med:
-            recs.append("**Q (FX)** muito baixo vs. demanda média → muitos setups. Avalie **Q** maior.")
-        elif lot_size > 2.5 * d_med:
-            recs.append("**Q (FX)** muito alto vs. demanda média → estoque elevado. Avalie **Q** menor.")
-
-    # ----------------- Render -----------------
     if recs:
         st.markdown("\n".join(f"- {r}" for r in recs))
     else:
         st.markdown("- Sem recomendações automáticas no momento.")
+
+    st.divider()
+
+    # ======================================================
+    # BLOCO: Simulador interativo de Q (política FX)
+    # ======================================================
+    st.subheader("What-if — impacto do tamanho de lote Q (FX) no custo")
+
+    # Caixa de parâmetros do simulador
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns([1,1,1,1])
+        with c1:
+            D_lbl = st.number_input(
+                "Demanda média (unid/mês)",
+                value=float(D_m), step=1.0, min_value=0.0, format="%.2f",
+                help="Por padrão usa a média da previsão atual (base mensal)."
+            )
+        with c2:
+            p_lbl = st.number_input(
+                "Capacidade p (unid/mês)",
+                value=float(p_m), step=1.0, min_value=0.0, format="%.2f",
+                help="Necessário **p > D** para EPQ/estoque durante produção."
+            )
+        with c3:
+            A_lbl = st.number_input(
+                "Custo de setup A (R$)",
+                value=float(A), step=10.0, min_value=0.0, format="%.2f",
+                help="Custo fixo por preparação do lote (setup)."
+            )
+        with c4:
+            H_lbl = st.number_input(
+                "Custo de manter H (R$/un·mês)",
+                value=float(H_m), step=1.0, min_value=0.0, format="%.4f",
+                help="Custo mensal por unidade mantida em estoque."
+            )
+
+        # Linha 2: Q, horizonte e SS extra (opcional) para ver efeito na manutenção
+        c5, c6, c7 = st.columns([1,1,1])
+        with c5:
+            # valor inicial de Q vindo da política atual, se existir
+            q_init = Q_fx if Q_fx > 0 else max(1, int(D_lbl))
+            Q_user = st.number_input(
+                "Q — Tamanho do lote (unid)",
+                value=float(q_init), min_value=1.0, step=1.0, format="%.0f",
+                help="Valor do lote para a política **FX** no cenário simulado."
+            )
+        with c6:
+            meses_sim = st.number_input(
+                "Horizonte (meses)",
+                value=int(HORIZ_MESES), min_value=1, step=1,
+                help="Usamos para multiplicar os custos mensais."
+            )
+        with c7:
+            ss_extra = st.number_input(
+                "SS adicional (unid/mês) (opcional)",
+                value=0.0, min_value=0.0, step=1.0, format="%.0f",
+                help="Só para ver sensibilidade: adiciona estoque médio constante para custo de manter."
+            )
+
+    # Funções de custo
+    def cost_setup_month(A, D, Q):
+        return A * (D / max(Q, 1e-9))
+
+    def cost_holding_month(H, Q, D, p):
+        # Fórmula EPQ: I_médio = (Q/2)*(1 - D/p). Se p<=D, não existe estoque durante produção (retorna 0).
+        if p <= D:
+            return 0.0
+        fator = (1.0 - D / p)
+        I_med = 0.5 * Q * fator
+        return H * I_med
+
+    # Calcula custos do cenário Q_user
+    setup_m = cost_setup_month(A_lbl, D_lbl, Q_user)
+    hold_m  = cost_holding_month(H_lbl, Q_user, D_lbl, p_lbl) + H_lbl * ss_extra
+    total_m = setup_m + hold_m
+
+    cost_setup_total = setup_m * meses_sim
+    cost_hold_total  = hold_m  * meses_sim
+    cost_total_sim   = cost_setup_total + cost_hold_total
+
+    # Cards de resultado do cenário
+    L, R = st.columns(2)
+    with L:
+        st.markdown("#### Custos no horizonte (cenário FX com Q informado)")
+        st.metric("Custo de setup (R$)", _safe(cost_setup_total, 2), help="A × (D/Q) × meses")
+        st.metric("Custo de manter (R$)", _safe(cost_hold_total, 2), help="H × (Q/2) × (1 − D/p) × meses  +  H × SS_extra × meses")
+        st.metric("Total (R$)", _safe(cost_total_sim, 2))
+    with R:
+        st.markdown("#### Parâmetros usados")
+        st.write(f"- Q = **{_safe(Q_user,0)}** un")
+        st.write(f"- A = **R$ {_safe(A_lbl,2)}**, H = **R$ {_safe(H_lbl,4)} /un·mês**")
+        st.write(f"- D = **{_safe(D_lbl,2)}** un/mês, p = **{_safe(p_lbl,2)}** un/mês")
+        if p_lbl <= D_lbl:
+            st.warning("Com **p ≤ D**, a parte de **manter** pelo EPQ fica 0 (sem estoque em produção).")
+        if ss_extra > 0:
+            st.info(f"Considerando **SS_extra = {_safe(ss_extra,0)}** un/mês no custo de manter.")
+
+    # ------------------------------------------------------
+    # Sensibilidade: C(Q) em uma faixa (apenas quando p > D)
+    # ------------------------------------------------------
+    st.markdown("##### Curva de sensibilidade C(Q) (FX)")
+
+    q_min = max(1, int(0.25 * (D_lbl if D_lbl > 0 else 1)))
+    q_max = max(q_min + 1, int(4 * (D_lbl if D_lbl > 0 else 10)))
+    q_grid = np.arange(q_min, q_max + 1, max(1, (q_max - q_min) // 25 or 1))
+
+    data = []
+    for q in q_grid:
+        c_s = cost_setup_month(A_lbl, D_lbl, q)
+        c_h = cost_holding_month(H_lbl, q, D_lbl, p_lbl) + H_lbl * ss_extra
+        data.append({"Q": int(q), "Setup (mês)": c_s, "Manter (mês)": c_h, "Total (mês)": c_s + c_h})
+
+    dfC = pd.DataFrame(data)
+
+    chart = alt.Chart(dfC).transform_fold(
+        ["Setup (mês)", "Manter (mês)", "Total (mês)"], as_=["Componente", "Custo"]
+    ).mark_line(point=True).encode(
+        x=alt.X("Q:Q", title="Tamanho do lote Q (unidades)"),
+        y=alt.Y("Custo:Q", title="Custo mensal (R$)"),
+        color=alt.Color("Componente:N"),
+        tooltip=["Q", "Componente", alt.Tooltip("Custo:Q", format=".2f")]
+    ).properties(height=260)
+    st.altair_chart(chart, use_container_width=True)
+
+    # ------------------------------------------------------
+    # Comparação com MPS atual (se existir)
+    # ------------------------------------------------------
+    st.markdown("##### Comparação rápida com o plano atual (se disponível)")
+    base_setup_total = None
+    base_hold_total = None
+    base_total = None
+    if isinstance(mps_table, pd.DataFrame):
+        row_qtd = _find_row(mps_table, ["Qtde. MPS", "Qtde MPS", "quantidade mps", "mps qty"])
+        row_est = _find_row(mps_table, ["Estoque Proj.", "Estoque Projetado", "estoque"])
+        if (row_qtd is not None) and (row_est is not None):
+            # custo de setup do MPS atual ≈ nº meses com pedido × A
+            n_orders = int(np.nansum(row_qtd.values.astype(float) > 0))
+            base_setup_total = A_lbl * n_orders
+            # custo de manter do MPS atual ≈ Σ estoque_mês × H
+            est_mes = np.clip(row_est.values.astype(float), 0, None)
+            base_hold_total = float(np.nansum(est_mes)) * H_lbl
+            base_total = base_setup_total + base_hold_total
+
+    colA, colB, colC = st.columns(3)
+    with colA:
+        st.metric("Cenário (Q informado) — Total (R$)", _safe(cost_total_sim, 2))
+    with colB:
+        if base_total is not None:
+            st.metric("Plano atual — Total (R$)", _safe(base_total, 2))
+        else:
+            st.caption("Plano atual indisponível para comparação.")
+    with colC:
+        if base_total is not None:
+            delta = cost_total_sim - base_total
+            sinal = "↑" if delta > 0 else "↓"
+            st.metric("Diferença (sim − atual)", _safe(delta, 2), help=f"Positivo = {sinal} custo frente ao plano atual")
+        else:
+            st.caption("—")
+
+    # Download dos resultados do grid
+    st.download_button(
+        "⬇️ Baixar tabela C(Q) (CSV)",
+        data=dfC.to_csv(index=False).encode("utf-8"),
+        file_name="sensibilidade_CQ.csv",
+        mime="text/csv",
+    )
 
     st.divider()
     c1, c2, c3 = st.columns(3)
