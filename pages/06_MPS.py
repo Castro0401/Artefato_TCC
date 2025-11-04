@@ -169,6 +169,7 @@ display_tbl = pd.DataFrame(
 
 # ... depois de montar 'display_tbl' (Previsto, Em carteira, etc.)
 st.session_state["mps_table"] = display_tbl.copy()   # 👈 usado pela página 07
+st.session_state["mps_tbl_display"] = display_tbl.copy()
 # Se quiser, também pode guardar o detalhado do core:
 st.session_state["mps_detail"] = mps_df.copy()
 
