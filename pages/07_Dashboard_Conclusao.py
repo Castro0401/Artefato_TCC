@@ -300,7 +300,6 @@ with tabs[2]:
         st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para 05_Inputs_MPS (preencher custos)")
         st.stop()
 
-    # Busca segura da tabela do MPS (pode estar salva com nomes diferentes)
     def _get_df_from_state(keys: list[str]):
         for k in keys:
             obj = st.session_state.get(k, None)
@@ -325,8 +324,16 @@ with tabs[2]:
         except Exception:
             return str(v)
 
+    def _as_float(x, default=0.0):
+        """Converte para float com segurança (None, '' etc.)."""
+        try:
+            if x is None: return float(default)
+            if isinstance(x, str) and x.strip() == "": return float(default)
+            return float(x)
+        except Exception:
+            return float(default)
+
     def _find_row(df: pd.DataFrame, candidates: list[str]):
-        """Encontra uma linha pelo nome (case-insensitive, tolerante) e retorna a Series."""
         idx_norm = df.index.astype(str).str.strip().str.lower()
         for cand in candidates:
             m = (idx_norm == cand.strip().lower())
@@ -348,33 +355,31 @@ with tabs[2]:
     total_ruptura = float(np.nansum(np.clip(row_ruptura.values.astype(float), 0, None))) if row_ruptura is not None else 0.0
     estoque_final = float(estoque_mes[-1]) if estoque_mes.size else np.nan
 
-    # ---------- Lê custos a partir dos inputs ----------
-    # v é obrigatório nos inputs (já garantimos na página 05_Inputs_MPS)
-    v = float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)))
-    A = float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)))  # custo por setup/encomenda
-    time_base = mps_inputs.get("time_base", "por mês")                  # "por mês" ou "por ano"
+    # ---------- Inputs de custo (robustos) ----------
+    # v (valor unitário) é obrigatório nos inputs; aqui reforçamos com fallback e conversão segura
+    v = _as_float(mps_inputs.get("v", None), _as_float(mps_inputs.get("unit_cost", 0.0), 0.0))
+    A = _as_float(mps_inputs.get("A", None), _as_float(mps_inputs.get("order_cost", 0.0), 0.0))
+    time_base = mps_inputs.get("time_base", "por mês")  # "por mês" ou "por ano"
     h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
-    H_direct = mps_inputs.get("H", None)   # pode ser None
-    r = mps_inputs.get("r", None)          # pode ser None
-    pi_shortage = float(mps_inputs.get("pi_shortage", mps_inputs.get("shortage_cost", 0.0)))
+    H_direct = mps_inputs.get("H", None)
+    r = mps_inputs.get("r", None)
+    pi_shortage = _as_float(mps_inputs.get("pi_shortage", None), _as_float(mps_inputs.get("shortage_cost", 0.0), 0.0))
 
-    # Converte H para base mensal:
-    # - Se usuário informou H: ele está na base escolhida. H_mensal = H (mês) ou H/12 (ano).
-    # - Se usuário informou r: H = r * v na base escolhida. H_mensal = (r*v) (mês) ou (r*v)/12 (ano).
+    # Converte H para base mensal
     if h_mode == "Informar H diretamente":
-        H_mensal = float(H_direct or 0.0)
+        H_mensal = _as_float(H_direct, 0.0)
         if time_base == "por ano":
             H_mensal = H_mensal / 12.0
     else:
-        r_val = float(r or 0.0)
+        r_val = _as_float(r, 0.0)
         H_calc = r_val * v
         H_mensal = H_calc if time_base == "por mês" else (H_calc / 12.0)
 
     # ---------- Cálculo dos custos ----------
-    cost_produzir   = total_prod * v                          # Σ(Qtde. MPS) * v
-    cost_encomendar = order_count * A                         # nº períodos com pedido * A
-    cost_manter     = total_estoque * H_mensal                # Σ(Estoque do mês) * H_mensal
-    cost_ruptura    = total_ruptura * pi_shortage             # Σ(Ruptura) * π
+    cost_produzir   = total_prod * v
+    cost_encomendar = order_count * A
+    cost_manter     = total_estoque * H_mensal
+    cost_ruptura    = total_ruptura * pi_shortage
     cost_total      = cost_produzir + cost_encomendar + cost_manter + cost_ruptura
 
     # ---------- Layout (sem tabela) ----------
