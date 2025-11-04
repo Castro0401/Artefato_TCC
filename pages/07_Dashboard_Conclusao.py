@@ -288,7 +288,7 @@ with tabs[1]:
 
 
 # ======================================================
-# TAB 3 — MPS & Custos (EPQ alinhado ao material)
+# TAB 3 — MPS & Custos (EPQ alinhado ao material — sem custo de produção)
 # ======================================================
 with tabs[2]:
     st.subheader("MPS — Custos e Resumo (somente leitura dos inputs)")
@@ -300,7 +300,6 @@ with tabs[2]:
         st.page_link("pages/05_Inputs_MPS.py", label="⚙️ Ir para 05_Inputs_MPS")
         st.stop()
 
-    # MPS (usado só para horizonte e rupturas)
     def _get_df_from_state(keys):
         for k in keys:
             obj = st.session_state.get(k, None)
@@ -342,12 +341,11 @@ with tabs[2]:
                 return df.loc[label]
         return None
 
-    # ---------- Leitura segura dos inputs ----------
-    time_base = mps_inputs.get("time_base", "por mês")  # "por mês" ou "por ano"
+    # ---------- Leitura segura ----------
+    time_base = mps_inputs.get("time_base", "por mês")
     A = _as_float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)), 0.0)
     v = _as_float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)), 0.0)
 
-    # H: sempre em base MENSAL para usar nas fórmulas
     h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
     if h_mode == "Informar H diretamente":
         H_in = _as_float(mps_inputs.get("H", 0.0), 0.0)
@@ -359,28 +357,23 @@ with tabs[2]:
         H_m = H_calc if time_base == "por mês" else H_calc / 12.0
         r_show = r_val
 
-    # D e p: taxas MENSais (vêm dos inputs; se anuais, converte)
     D_m = _as_float(mps_inputs.get("D_month", mps_inputs.get("D", 0.0)), 0.0)
     p_m = _as_float(mps_inputs.get("p_month", mps_inputs.get("p", 0.0)), 0.0)
     if time_base == "por ano":
         D_m = D_m / 12.0
         p_m = p_m / 12.0
 
-    # fallback: se D_m não existir nos inputs, tirar média da previsão salva
     if D_m <= 0 and "forecast_df" in st.session_state:
         _fc = st.session_state["forecast_df"][["ds", "y"]].copy()
         D_m = float(np.nanmean(_fc["y"].values)) if len(_fc) else 0.0
 
-    # Horizonte (nº de meses do MPS)
     HORIZ_MESES = max(1, len(mps_tbl_display.columns))
 
-    # ---------- Ruptura (do MPS) ----------
     row_ruptura = _find_row(mps_tbl_display, ["Ruptura", "falta", "backlog", "não atendido"])
     total_ruptura = float(np.nansum(np.clip(row_ruptura.values.astype(float), 0, None))) if row_ruptura is not None else 0.0
-    pi_shortage = _as_float(mps_inputs.get("pi_shortage", mps_inputs.get("shortage_cost", 0.0)), 0.0)
+    pi_shortage = _as_float(mps_inputs.get("pi_shortage", 0.0), 0.0)
 
-    # ---------- EPQ (fórmulas do material) ----------
-    # Guardas para p > D (condição do EPQ)
+    # ---------- EPQ ----------
     epq_viavel = (p_m > D_m) and (H_m > 0) and (A >= 0)
 
     if epq_viavel:
@@ -389,23 +382,22 @@ with tabs[2]:
             Q_star = np.sqrt((2.0 * A * D_m) / (H_m * fator))
         except Exception:
             Q_star = np.nan
-        # custos por MÊS
-        C_setup_mes = (A * D_m / Q_star) if (Q_star and Q_star > 0) else 0.0
         I_med = 0.5 * Q_star * fator if (Q_star and Q_star > 0) else 0.0
-        C_hold_mes = H_m * I_med
-        C_prod_mes = v * D_m
+
+        # Custos relevantes (por mês)
+        C_setup_mes = (A * D_m / Q_star) if (Q_star and Q_star > 0) else 0.0
+        C_hold_mes  = H_m * I_med
+
     else:
         Q_star = np.nan
-        C_setup_mes = C_hold_mes = C_prod_mes = 0.0
+        C_setup_mes = C_hold_mes = 0.0
 
-    # custos para TODO o horizonte (multiplica pelos meses)
     cost_encomendar = C_setup_mes * HORIZ_MESES
     cost_manter     = C_hold_mes * HORIZ_MESES
-    cost_produzir   = C_prod_mes * HORIZ_MESES
     cost_ruptura    = total_ruptura * pi_shortage
-    cost_total      = cost_encomendar + cost_manter + cost_produzir + cost_ruptura
+    cost_total      = cost_encomendar + cost_manter + cost_ruptura
 
-    # ---------- Cabeçalho de variáveis ----------
+    # ---------- Expander com variáveis ----------
     with st.expander("ℹ️ Variáveis (05_Inputs_MPS) e parâmetros calculados"):
         a1, a2, a3, a4 = st.columns(4)
         a1.metric("A (setup)", _safe(A, 2))
@@ -418,18 +410,12 @@ with tabs[2]:
         b3.metric("r (taxa man.)", _safe(r_show, 4))
         b4.metric("Q* (EPQ)", _safe(Q_star, 2))
 
-        st.caption(
-            "Fórmulas EPQ: "
-            " \(Q^*=\\sqrt{\\tfrac{2AD}{H(1-D/p)}}\),  "
-            " \(I_{\\max}=Q^*(1-D/p)\), \(I_{médio}=I_{\\max}/2\), "
-            " \(C_{setup}=\\tfrac{AD}{Q^*}\), \(C_{hold}=H\\cdot I_{médio}\), \(C_{prod}=v\\cdot D\). "
-            "Custos acima são **por mês**; multiplicamos por **nº de meses do horizonte**."
-        )
+        st.latex(r"Q^* = \sqrt{\frac{2AD}{H(1-D/p)}}")
+        st.latex(r"I_{médio} = \frac{Q}{2}\left(1 - \frac{D}{p}\right)")
+        st.latex(r"C_{setup} = \frac{AD}{Q}, \quad C_{hold} = H \cdot I_{médio}")
+        st.caption("Custos acima são **por mês**; multiplicamos pelo **nº de meses do horizonte**.")
 
-    # =============================
-    # UI — Decomposição com tooltips
-    # =============================
-
+    # ---------- Layout visual ----------
     st.markdown("""
     <style>
     .kpi-card {background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px}
@@ -446,51 +432,28 @@ with tabs[2]:
         except Exception:
             return str(x)
 
-    def _fmt_num(x, nd=2):
-        try:
-            return f"{float(x):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        except Exception:
-            return str(x)
-
     def _help_span(txt: str) -> str:
         safe = (txt or "").replace('"', "&quot;")
         return f'<span class="kpi-help" title="{safe}">ⓘ</span>'
 
-    # Rótulos numéricos para os tooltips (usando as variáveis corretas)
-    Q_lbl      = _fmt_num(Q_star, 2) if not np.isnan(Q_star) else "—"
-    D_lbl      = _fmt_num(D_m, 2)
-    p_lbl      = _fmt_num(p_m, 2)
-    H_lbl      = _fmt_num(H_m, 4)
-    v_lbl      = _fmt_num(v, 2)
-    r_lbl      = _fmt_num(r_show, 4)
-    A_lbl      = _fmt_money(A, 2)
+    Q_lbl      = _safe(Q_star, 2)
+    D_lbl      = _safe(D_m, 2)
+    p_lbl      = _safe(p_m, 2)
+    H_lbl      = _safe(H_m, 4)
+    A_lbl      = _safe(A, 2)
     months_lbl = f"{int(HORIZ_MESES)}"
 
-    # Tooltips com as FÓRMULAS (EPQ)
     tip_setup = (
-        "EPQ — Custo de encomendar/setup por mês: C_setup,mês = A · (D / Q). "
-        f"No horizonte: C_setup = C_setup,mês × meses.  "
+        "Custo de Setup = A × D / Q. "
         f"Parâmetros usados: A={A_lbl}, D={D_lbl}, Q={Q_lbl}, meses={months_lbl}."
     )
-    tip_prod = (
-        "EPQ — Custo de produção por mês (valor das unidades fabricadas): "
-        "C_prod,mês = v · D. No horizonte: C_prod = C_prod,mês × meses.  "
-        f"Parâmetros usados: v={v_lbl}, D={D_lbl}, meses={months_lbl}."
-    )
     tip_hold = (
-        "EPQ — Nível médio de estoque: I_médio = (Q/2) · (1 − D/p).  "
-        "Custo mensal de manter: C_hold,mês = H · I_médio. "
-        f"No horizonte: C_hold = C_hold,mês × meses.  "
+        "Custo de Manter = H × (Q/2) × (1 − D/p). "
         f"Parâmetros usados: H={H_lbl}, Q={Q_lbl}, D={D_lbl}, p={p_lbl}, meses={months_lbl}."
     )
-    tip_rupt = (
-        "Custo de ruptura: C_rupt = Σ(Ruptura) × π (apenas se sua tabela MPS tiver a linha de Ruptura)."
-    )
-    tip_total = (
-        "Custo relevante total = C_setup + C_prod + C_hold + C_rupt."
-    )
+    tip_rupt = "Custo de ruptura: Σ(Ruptura) × π."
+    tip_total = "Custo total relevante = Setup + Manter + Ruptura."
 
-    # Layout 2×2 (sem empilhar)
     L, R = st.columns(2)
 
     with L:
@@ -499,7 +462,7 @@ with tabs[2]:
                 <div class="kpi-top">Custo de encomendar (R$){_help_span(tip_setup)}</div>
                 <div class="kpi-value">{_fmt_money(cost_encomendar, 2)}</div>
                 <div class="kpi-sub">Usa A, D, Q e meses</div>
-                </div>""",
+            </div>""",
             unsafe_allow_html=True,
         )
 
@@ -508,37 +471,28 @@ with tabs[2]:
                 <div class="kpi-top">Custo de manter (R$){_help_span(tip_hold)}</div>
                 <div class="kpi-value">{_fmt_money(cost_manter, 2)}</div>
                 <div class="kpi-sub">Usa H, Q, D, p e meses</div>
-                </div>""",
+            </div>""",
             unsafe_allow_html=True,
         )
 
     with R:
         st.markdown(
             f"""<div class="kpi-card">
-                <div class="kpi-top">Custo de produzir (R$){_help_span(tip_prod)}</div>
-                <div class="kpi-value">{_fmt_money(cost_produzir, 2)}</div>
-                <div class="kpi-sub">Usa v, D e meses</div>
-                </div>""",
+                <div class="kpi-top">Custo de ruptura (R$){_help_span(tip_rupt)}</div>
+                <div class="kpi-value">{_fmt_money(cost_ruptura, 2)}</div>
+                <div class="kpi-sub">Σ(Ruptura) × π</div>
+            </div>""",
             unsafe_allow_html=True,
         )
 
         st.markdown(
             f"""<div class="kpi-card">
-                <div class="kpi-top">Custo de ruptura (R$){_help_span(tip_rupt)}</div>
-                <div class="kpi-value">{_fmt_money(cost_ruptura, 2)}</div>
-                <div class="kpi-sub">Σ(Ruptura) × π</div>
-                </div>""",
+                <div class="kpi-top">Custo total relevante{_help_span(tip_total)}</div>
+                <div class="kpi-value">{_fmt_money(cost_total, 2)}</div>
+                <div class="kpi-sub">Setup + Manter + Ruptura</div>
+            </div>""",
             unsafe_allow_html=True,
         )
-
-    st.markdown(
-        f"""<div class="kpi-card">
-            <div class="kpi-top">Custo relevante total{_help_span(tip_total)}</div>
-            <div class="kpi-value">{_fmt_money(cost_total, 2)}</div>
-            <div class="kpi-sub">Soma dos quatro componentes</div>
-            </div>""",
-        unsafe_allow_html=True,
-    )
 
     if not epq_viavel:
         st.warning("EPQ não aplicável com os parâmetros atuais (é preciso **p > D** e **H > 0**). "
