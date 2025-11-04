@@ -393,7 +393,7 @@ with tabs[2]:
         C_setup_mes = (A * D_m / Q_star) if (Q_star and Q_star > 0) else 0.0
         I_med = 0.5 * Q_star * fator if (Q_star and Q_star > 0) else 0.0
         C_hold_mes = H_m * I_med
-        C_prod_mes = v * D_m  # opcionalmente exibir
+        C_prod_mes = v * D_m
     else:
         Q_star = np.nan
         C_setup_mes = C_hold_mes = C_prod_mes = 0.0
@@ -426,12 +426,10 @@ with tabs[2]:
             "Custos acima são **por mês**; multiplicamos por **nº de meses do horizonte**."
         )
 
-    # ---------- Layout (sem tabela) ----------
     # =============================
     # UI — Decomposição com tooltips
     # =============================
 
-    # CSS minimalista para os cartões
     st.markdown("""
     <style>
     .kpi-card {background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px}
@@ -455,19 +453,18 @@ with tabs[2]:
             return str(x)
 
     def _help_span(txt: str) -> str:
-        # evita quebrar o title
         safe = (txt or "").replace('"', "&quot;")
         return f'<span class="kpi-help" title="{safe}">ⓘ</span>'
 
-    # Garante alguns rótulos numéricos que vamos citar nos tooltips (opcional)
-    Q_lbl      = _fmt_num(Q, 2) if "Q" in locals() else "—"
-    D_lbl      = _fmt_num(D, 2)
-    p_lbl      = _fmt_num(p, 2) if "p" in locals() else "—"
-    H_lbl      = _fmt_num(H, 4) if "H" in locals() and H is not None else "—"
-    v_lbl      = _fmt_num(v, 2) if "v" in locals() and v is not None else "—"
-    r_lbl      = _fmt_num(r, 4) if "r" in locals() and r is not None else "—"
+    # Rótulos numéricos para os tooltips (usando as variáveis corretas)
+    Q_lbl      = _fmt_num(Q_star, 2) if not np.isnan(Q_star) else "—"
+    D_lbl      = _fmt_num(D_m, 2)
+    p_lbl      = _fmt_num(p_m, 2)
+    H_lbl      = _fmt_num(H_m, 4)
+    v_lbl      = _fmt_num(v, 2)
+    r_lbl      = _fmt_num(r_show, 4)
     A_lbl      = _fmt_money(A, 2)
-    months_lbl = f"{int(months)}"
+    months_lbl = f"{int(HORIZ_MESES)}"
 
     # Tooltips com as FÓRMULAS (EPQ)
     tip_setup = (
@@ -546,7 +543,6 @@ with tabs[2]:
     if not epq_viavel:
         st.warning("EPQ não aplicável com os parâmetros atuais (é preciso **p > D** e **H > 0**). "
                    "Os custos de encomendar/manter mostrados ficarão zerados até ajustar os inputs.")
-
 
 # ======================================================
 # TAB 4 — Recomendações (texto curto e objetivo)
