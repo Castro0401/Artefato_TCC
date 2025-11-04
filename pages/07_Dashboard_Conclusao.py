@@ -288,7 +288,7 @@ with tabs[1]:
 
 
 # ======================================================
-# TAB 3 — MPS & Custos (EPQ alinhado ao material — sem custo de produção)
+# TAB 3 — MPS & Custos (EPQ com Q do usuário; L4L por mês; sem custo de produção)
 # ======================================================
 with tabs[2]:
     st.subheader("MPS — Custos e Resumo (somente leitura dos inputs)")
@@ -306,6 +306,8 @@ with tabs[2]:
             if isinstance(obj, pd.DataFrame) and not obj.empty:
                 return obj
         return None
+
+    # tabela do MPS (precisamos dela para L4L e para rupturas)
     mps_tbl_display = _get_df_from_state(["mps_tbl_display", "mps_table"])
     if mps_tbl_display is None:
         st.info("Não há tabela do MPS na memória. Gere o MPS na página **06_MPS** e volte.")
@@ -341,81 +343,99 @@ with tabs[2]:
                 return df.loc[label]
         return None
 
-    # ---------- Leitura segura ----------
-    time_base = mps_inputs.get("time_base", "por mês")
-    A = _as_float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)), 0.0)
-    v = _as_float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)), 0.0)
+    # ---------- Leitura segura (05_Inputs_MPS) ----------
+    time_base   = mps_inputs.get("time_base", "por mês")
+    A           = _as_float(mps_inputs.get("A", mps_inputs.get("order_cost", 0.0)), 0.0)
+    v           = _as_float(mps_inputs.get("v", mps_inputs.get("unit_cost", 0.0)), 0.0)  # não entra no custo, só exibição
+    lot_policy  = mps_inputs.get("lot_policy_default", "FX")  # "FX" ou "L4L"
+    Q_user      = int(_as_float(mps_inputs.get("lot_size_default", 1), 1))  # tamanho do lote quando FX
 
+    # H (mensal)
     h_mode = mps_inputs.get("h_mode", "Informar H diretamente")
     if h_mode == "Informar H diretamente":
-        H_in = _as_float(mps_inputs.get("H", 0.0), 0.0)
-        H_m = H_in if time_base == "por mês" else H_in / 12.0
+        H_in  = _as_float(mps_inputs.get("H", 0.0), 0.0)
+        H_m   = H_in if time_base == "por mês" else H_in / 12.0
         r_show = _as_float(mps_inputs.get("r", None), 0.0)
     else:
-        r_val = _as_float(mps_inputs.get("r", 0.0), 0.0)
+        r_val  = _as_float(mps_inputs.get("r", 0.0), 0.0)
         H_calc = r_val * v
-        H_m = H_calc if time_base == "por mês" else H_calc / 12.0
+        H_m    = H_calc if time_base == "por mês" else H_calc / 12.0
         r_show = r_val
 
+    # D e p sempre mensais (se vieram anuais, converte)
     D_m = _as_float(mps_inputs.get("D_month", mps_inputs.get("D", 0.0)), 0.0)
     p_m = _as_float(mps_inputs.get("p_month", mps_inputs.get("p", 0.0)), 0.0)
     if time_base == "por ano":
-        D_m = D_m / 12.0
-        p_m = p_m / 12.0
+        D_m /= 12.0
+        p_m /= 12.0
 
+    # fallback: média da previsão salva
     if D_m <= 0 and "forecast_df" in st.session_state:
         _fc = st.session_state["forecast_df"][["ds", "y"]].copy()
         D_m = float(np.nanmean(_fc["y"].values)) if len(_fc) else 0.0
 
     HORIZ_MESES = max(1, len(mps_tbl_display.columns))
 
+    # Ruptura (se existir)
     row_ruptura = _find_row(mps_tbl_display, ["Ruptura", "falta", "backlog", "não atendido"])
     total_ruptura = float(np.nansum(np.clip(row_ruptura.values.astype(float), 0, None))) if row_ruptura is not None else 0.0
     pi_shortage = _as_float(mps_inputs.get("pi_shortage", 0.0), 0.0)
 
-    # ---------- EPQ ----------
-    epq_viavel = (p_m > D_m) and (H_m > 0) and (A >= 0)
+    # Linha de recebimentos (para L4L e contagem de setups)
+    row_qtd_mps = _find_row(mps_tbl_display, ["qtde. mps", "qtde mps", "quantidade mps", "mps qty"])
+    qtd_mps_vals = row_qtd_mps.values.astype(float) if row_qtd_mps is not None else np.zeros(HORIZ_MESES)
 
-    if epq_viavel:
-        fator = (1.0 - (D_m / p_m))
-        try:
-            Q_star = np.sqrt((2.0 * A * D_m) / (H_m * fator))
-        except Exception:
-            Q_star = np.nan
-        I_med = 0.5 * Q_star * fator if (Q_star and Q_star > 0) else 0.0
+    # ---------- Custos (Q do usuário) ----------
+    # Condição estrutural do EPQ
+    epq_estrutura_ok = (p_m > D_m) and (H_m > 0) and (A >= 0)
 
-        # Custos relevantes (por mês)
-        C_setup_mes = (A * D_m / Q_star) if (Q_star and Q_star > 0) else 0.0
-        C_hold_mes  = H_m * I_med
-
+    if not epq_estrutura_ok:
+        C_setup_total = 0.0
+        C_hold_total  = 0.0
     else:
-        Q_star = np.nan
-        C_setup_mes = C_hold_mes = 0.0
+        if lot_policy == "FX":
+            # EPQ com Q = lote informado
+            Q = max(1, int(Q_user))
+            C_setup_mes = (A * D_m / Q)
+            C_hold_mes  = H_m * (Q / 2.0) * (1.0 - (D_m / p_m))
+            C_setup_total = C_setup_mes * HORIZ_MESES
+            C_hold_total  = C_hold_mes  * HORIZ_MESES
+        else:
+            # L4L: por mês com qi do MPS
+            setups = int(np.nansum((qtd_mps_vals > 0).astype(int)))
+            C_setup_total = A * setups
+            fator = (1.0 - (D_m / p_m))
+            qi_term = np.clip(qtd_mps_vals, 0, None) / 2.0
+            C_hold_total = float(np.nansum(H_m * qi_term * fator))
 
-    cost_encomendar = C_setup_mes * HORIZ_MESES
-    cost_manter     = C_hold_mes * HORIZ_MESES
-    cost_ruptura    = total_ruptura * pi_shortage
-    cost_total      = cost_encomendar + cost_manter + cost_ruptura
+    cost_ruptura = total_ruptura * pi_shortage
+    cost_total   = C_setup_total + C_hold_total + cost_ruptura
 
     # ---------- Expander com variáveis ----------
-    with st.expander("ℹ️ Variáveis (05_Inputs_MPS) e parâmetros calculados"):
+    with st.expander("ℹ️ Variáveis (05_Inputs_MPS) e parâmetros usados"):
         a1, a2, a3, a4 = st.columns(4)
         a1.metric("A (setup)", _safe(A, 2))
         a2.metric("v (valor unit.)", _safe(v, 2))
-        a3.metric("H mensal (R$/un·mês)", _safe(H_m, 2))
+        a3.metric("H mensal (R$/un·mês)", _safe(H_m, 4))
         a4.metric("π (ruptura)", _safe(pi_shortage, 2))
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("D (unid/mês)", _safe(D_m, 2))
         b2.metric("p (unid/mês)", _safe(p_m, 2))
         b3.metric("r (taxa man.)", _safe(r_show, 4))
-        b4.metric("Q* (EPQ)", _safe(Q_star, 2))
+        b4.metric("Política", "Lote Fixo" if lot_policy == "FX" else "Lote-a-Lote")
+        if lot_policy == "FX":
+            st.caption(f"Lote informado (Q): **{_safe(Q_user, 0)}**")
+        else:
+            st.caption(f"Setups no horizonte (meses com recebimento): **{int(np.nansum((qtd_mps_vals>0).astype(int)))}**")
 
-        st.latex(r"Q^* = \sqrt{\frac{2AD}{H(1-D/p)}}")
-        st.latex(r"C_{manter} = \frac{Q}{2}\left(1 - \frac{D}{p}\right)")
-        st.latex(r"C_{setup} = \frac{AD}{Q}, \quad C_{ruptura} = \sum (Ruptura) \times \pi")
-        st.caption("Custos acima são **por mês**; multiplicamos pelo **nº de meses do horizonte**.")
+        # Fórmulas renderizadas
+        st.latex(r"C_{\text{setup,mês}}=\frac{A\,D_m}{Q}\quad\text{(FX)}")
+        st.latex(r"C_{\text{hold,mês}}=H_m\cdot\frac{Q}{2}\left(1-\frac{D_m}{p_m}\right)\quad\text{(FX)}")
+        st.latex(r"C_{\text{setup,total}}=\#\text{setups}\cdot A\quad\text{(L4L)}")
+        st.latex(r"C_{\text{hold,total}}=\sum_i H_m\cdot\frac{q_i}{2}\left(1-\frac{D_m}{p_m}\right)\quad\text{(L4L)}")
+        st.caption("Multiplicamos pelos **meses do horizonte** quando FX. Em L4L, somamos mês a mês.")
 
-    # ---------- Layout visual ----------
+    # ---------- Layout visual (cards + tooltips) ----------
     st.markdown("""
     <style>
     .kpi-card {background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px}
@@ -436,22 +456,16 @@ with tabs[2]:
         safe = (txt or "").replace('"', "&quot;")
         return f'<span class="kpi-help" title="{safe}">ⓘ</span>'
 
-    Q_lbl      = _safe(Q_star, 2)
-    D_lbl      = _safe(D_m, 2)
-    p_lbl      = _safe(p_m, 2)
-    H_lbl      = _safe(H_m, 4)
-    A_lbl      = _safe(A, 2)
-    months_lbl = f"{int(HORIZ_MESES)}"
-
+    months_lbl = f"{HORIZ_MESES:d}"
     tip_setup = (
-        "Custo de Setup = A × D / Q. "
-        f"Parâmetros usados: A={A_lbl}, D={D_lbl}, Q={Q_lbl}, meses={months_lbl}."
+        "FX: C_setup,mês = A·D_m/Q; total = C_setup,mês × meses. "
+        "L4L: C_setup,total = nº de setups × A."
     )
     tip_hold = (
-        "Custo de Manter = H × (Q/2) × (1 − D/p). "
-        f"Parâmetros usados: H={H_lbl}, Q={Q_lbl}, D={D_lbl}, p={p_lbl}, meses={months_lbl}."
+        "FX: C_hold,mês = H_m·(Q/2)·(1 − D_m/p_m); total = C_hold,mês × meses. "
+        "L4L: C_hold,total = Σ H_m·(q_i/2)·(1 − D_m/p_m)."
     )
-    tip_rupt = "Custo de ruptura: Σ(Ruptura) × π."
+    tip_rupt = "C_rupt = Σ(Ruptura) × π (se sua tabela tiver a linha de Ruptura)."
     tip_total = "Custo total relevante = Setup + Manter + Ruptura."
 
     L, R = st.columns(2)
@@ -460,17 +474,16 @@ with tabs[2]:
         st.markdown(
             f"""<div class="kpi-card">
                 <div class="kpi-top">Custo de setup (R$){_help_span(tip_setup)}</div>
-                <div class="kpi-value">{_fmt_money(cost_encomendar, 2)}</div>
-                <div class="kpi-sub">Usa A, D, Q e meses</div>
+                <div class="kpi-value">{_fmt_money(C_setup_total, 2)}</div>
+                <div class="kpi-sub">{'FX (mensal × ' + months_lbl + ')' if lot_policy=='FX' else 'L4L (setups × A)'}</div>
             </div>""",
             unsafe_allow_html=True,
         )
-
         st.markdown(
             f"""<div class="kpi-card">
                 <div class="kpi-top">Custo de manter (R$){_help_span(tip_hold)}</div>
-                <div class="kpi-value">{_fmt_money(cost_manter, 2)}</div>
-                <div class="kpi-sub">Usa H, Q, D, p e meses</div>
+                <div class="kpi-value">{_fmt_money(C_hold_total, 2)}</div>
+                <div class="kpi-sub">{'FX (mensal × ' + months_lbl + ')' if lot_policy=='FX' else 'L4L (soma mensal)'}</div>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -484,7 +497,6 @@ with tabs[2]:
             </div>""",
             unsafe_allow_html=True,
         )
-
         st.markdown(
             f"""<div class="kpi-card">
                 <div class="kpi-top">Custo total relevante{_help_span(tip_total)}</div>
@@ -494,9 +506,9 @@ with tabs[2]:
             unsafe_allow_html=True,
         )
 
-    if not epq_viavel:
-        st.warning("EPQ não aplicável com os parâmetros atuais (é preciso **p > D** e **H > 0**). "
-                   "Os custos de encomendar/manter mostrados ficarão zerados até ajustar os inputs.")
+    if not epq_estrutura_ok:
+        st.warning("Parâmetros inválidos para EPQ: é preciso **p > D** e **H > 0**. "
+                   "Ajuste no **05_Inputs_MPS**.")
 
 # ======================================================
 # TAB 4 — Recomendações (texto curto e objetivo)
