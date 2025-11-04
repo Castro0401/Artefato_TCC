@@ -427,39 +427,122 @@ with tabs[2]:
         )
 
     # ---------- Layout (sem tabela) ----------
-    st.markdown("### Decomposição de custos (horizonte atual)")
-    cL, cR = st.columns(2)
+    # =============================
+    # UI — Decomposição com tooltips
+    # =============================
 
-    with cL:
-        st.metric("Custo de encomendar (R$)", _safe(cost_encomendar, 2))
-        st.caption(
-            f"🛈 **Fórmula (EPQ)**: \(C_{{setup,mes}}=\\frac{{A\\,D}}{{Q^*}}\). "
-            f"Ao todo: \(C_{{setup}}=C_{{setup,mes}}\\times\\text{{meses}}\) → "
-            f"{_safe(C_setup_mes,2)} × {HORIZ_MESES}."
+    # CSS minimalista para os cartões
+    st.markdown("""
+    <style>
+    .kpi-card {background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px}
+    .kpi-top {display:flex;align-items:center;gap:6px;color:#374151;font-size:0.95rem}
+    .kpi-help {color:#6b7280;cursor:help;font-size:0.95rem}
+    .kpi-value {font-size:1.85rem;font-weight:700;line-height:1.1;margin-top:6px}
+    .kpi-sub {color:#6b7280;font-size:0.85rem;margin-top:4px}
+    </style>
+    """, unsafe_allow_html=True)
+
+    def _fmt_money(x, nd=2):
+        try:
+            return f"{float(x):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return str(x)
+
+    def _fmt_num(x, nd=2):
+        try:
+            return f"{float(x):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return str(x)
+
+    def _help_span(txt: str) -> str:
+        # evita quebrar o title
+        safe = (txt or "").replace('"', "&quot;")
+        return f'<span class="kpi-help" title="{safe}">ⓘ</span>'
+
+    # Garante alguns rótulos numéricos que vamos citar nos tooltips (opcional)
+    Q_lbl      = _fmt_num(Q, 2) if "Q" in locals() else "—"
+    D_lbl      = _fmt_num(D, 2)
+    p_lbl      = _fmt_num(p, 2) if "p" in locals() else "—"
+    H_lbl      = _fmt_num(H, 4) if "H" in locals() and H is not None else "—"
+    v_lbl      = _fmt_num(v, 2) if "v" in locals() and v is not None else "—"
+    r_lbl      = _fmt_num(r, 4) if "r" in locals() and r is not None else "—"
+    A_lbl      = _fmt_money(A, 2)
+    months_lbl = f"{int(months)}"
+
+    # Tooltips com as FÓRMULAS (EPQ)
+    tip_setup = (
+        "EPQ — Custo de encomendar/setup por mês: C_setup,mês = A · (D / Q). "
+        f"No horizonte: C_setup = C_setup,mês × meses.  "
+        f"Parâmetros usados: A={A_lbl}, D={D_lbl}, Q={Q_lbl}, meses={months_lbl}."
+    )
+    tip_prod = (
+        "EPQ — Custo de produção por mês (valor das unidades fabricadas): "
+        "C_prod,mês = v · D. No horizonte: C_prod = C_prod,mês × meses.  "
+        f"Parâmetros usados: v={v_lbl}, D={D_lbl}, meses={months_lbl}."
+    )
+    tip_hold = (
+        "EPQ — Nível médio de estoque: I_médio = (Q/2) · (1 − D/p).  "
+        "Custo mensal de manter: C_hold,mês = H · I_médio. "
+        f"No horizonte: C_hold = C_hold,mês × meses.  "
+        f"Parâmetros usados: H={H_lbl}, Q={Q_lbl}, D={D_lbl}, p={p_lbl}, meses={months_lbl}."
+    )
+    tip_rupt = (
+        "Custo de ruptura: C_rupt = Σ(Ruptura) × π (apenas se sua tabela MPS tiver a linha de Ruptura)."
+    )
+    tip_total = (
+        "Custo relevante total = C_setup + C_prod + C_hold + C_rupt."
+    )
+
+    # Layout 2×2 (sem empilhar)
+    L, R = st.columns(2)
+
+    with L:
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-top">Custo de encomendar (R$){_help_span(tip_setup)}</div>
+                <div class="kpi-value">{_fmt_money(cost_encomendar, 2)}</div>
+                <div class="kpi-sub">Usa A, D, Q e meses</div>
+                </div>""",
+            unsafe_allow_html=True,
         )
 
-        st.metric("Custo de manter (R$)", _safe(cost_manter, 2))
-        st.caption(
-            f"🛈 **Fórmula (EPQ)**: \(I_{{médio}}=\\tfrac{{Q^*}}{2}\\big(1-\\tfrac{{D}}{{p}}\\big)\); "
-            f"\(C_{{hold,mes}}=H\\cdot I_{{médio}}\). Ao todo: "
-            f"{_safe(H_m,4)} × {_safe(0.5*(Q_star if not np.isnan(Q_star) else 0)*(1-D_m/p_m) if epq_viavel else 0.0,2)} × {HORIZ_MESES}."
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-top">Custo de manter (R$){_help_span(tip_hold)}</div>
+                <div class="kpi-value">{_fmt_money(cost_manter, 2)}</div>
+                <div class="kpi-sub">Usa H, Q, D, p e meses</div>
+                </div>""",
+            unsafe_allow_html=True,
         )
 
-    with cR:
-        st.metric("Custo de produzir (R$)", _safe(cost_produzir, 2))
-        st.caption(
-            f"🛈 **Fórmula**: \(C_{{prod,mes}}=v\\cdot D\). Ao todo: "
-            f"{_safe(v,2)} × {_safe(D_m,2)} × {HORIZ_MESES}."
+    with R:
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-top">Custo de produzir (R$){_help_span(tip_prod)}</div>
+                <div class="kpi-value">{_fmt_money(cost_produzir, 2)}</div>
+                <div class="kpi-sub">Usa v, D e meses</div>
+                </div>""",
+            unsafe_allow_html=True,
         )
 
-        st.metric("Custo de ruptura (R$)", _safe(cost_ruptura, 2))
-        st.caption(
-            f"🛈 **Fórmula**: \(C_{{rupt}}=\\sum\\text{{Ruptura}}\\times\\pi\). "
-            f"No horizonte: {_safe(total_ruptura,0)} × {_safe(pi_shortage,2)}."
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-top">Custo de ruptura (R$){_help_span(tip_rupt)}</div>
+                <div class="kpi-value">{_fmt_money(cost_ruptura, 2)}</div>
+                <div class="kpi-sub">Σ(Ruptura) × π</div>
+                </div>""",
+            unsafe_allow_html=True,
         )
 
-    st.markdown("#### Custo relevante total")
-    st.metric("Total (R$)", _safe(cost_total, 2))
+    st.markdown(
+        f"""<div class="kpi-card">
+            <div class="kpi-top">Custo relevante total{_help_span(tip_total)}</div>
+            <div class="kpi-value">{_fmt_money(cost_total, 2)}</div>
+            <div class="kpi-sub">Soma dos quatro componentes</div>
+            </div>""",
+        unsafe_allow_html=True,
+    )
+
     if not epq_viavel:
         st.warning("EPQ não aplicável com os parâmetros atuais (é preciso **p > D** e **H > 0**). "
                    "Os custos de encomendar/manter mostrados ficarão zerados até ajustar os inputs.")
