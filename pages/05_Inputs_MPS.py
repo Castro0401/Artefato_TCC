@@ -221,7 +221,6 @@ with cP:
     )
 
 # H direto ou a partir de r·v
-st.markdown("**H — Custo de manter por unidade e por período**")
 h_mode = st.radio(
     "Como deseja informar H?",
     options=["Informar H diretamente", "Calcular H a partir de r e v"],
@@ -255,7 +254,6 @@ else:
     H = None  # será calculado na página de conclusão
 
 # (opcional) Custo de falta / ruptura por unidade
-st.markdown("**π — Custo de falta (opcional)**")
 colPi, _, _ = st.columns(3)
 with colPi:
     pi_shortage = st.number_input(

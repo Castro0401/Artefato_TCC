@@ -25,7 +25,7 @@ def home_page():
         ### Principais Outputs  
         - 📈 **Previsão de demanda** para os próximos **6, 8 ou 12 meses**.  
         - 🗓️ **MPS** (Master Production Schedule).  
-        - 📊 **Dashboards executivos** para visualização consolidada e apoio à decisão.  
+        - 📊 **Outputs executivos** para visualização consolidada e apoio à decisão.  
         """)
 
     st.divider()
@@ -45,7 +45,7 @@ nav = st.navigation([
     st.Page("pages/04_Previsao.py",             title="Previsão",                 icon="🔮"),
     st.Page("pages/05_Inputs_MPS.py",           title="Inputs do MPS",           icon="⚙️"),
     st.Page("pages/06_MPS.py",                  title="MPS",      icon="🗓️"),
-    st.Page("pages/07_Dashboard_Conclusao.py",  title="Dashboard & Conclusão",   icon="📊"),
+    st.Page("pages/07_Dashboard_Conclusao.py",  title="Conclusão",   icon="📊"),
 ])
 
 nav.run()
