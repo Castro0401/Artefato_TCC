@@ -325,7 +325,6 @@ with tabs[2]:
             return str(v)
 
     def _as_float(x, default=0.0):
-        """Converte para float com segurança (None, '' etc.)."""
         try:
             if x is None: return float(default)
             if isinstance(x, str) and x.strip() == "": return float(default)
@@ -356,7 +355,6 @@ with tabs[2]:
     estoque_final = float(estoque_mes[-1]) if estoque_mes.size else np.nan
 
     # ---------- Inputs de custo (robustos) ----------
-    # v (valor unitário) é obrigatório nos inputs; aqui reforçamos com fallback e conversão segura
     v = _as_float(mps_inputs.get("v", None), _as_float(mps_inputs.get("unit_cost", 0.0), 0.0))
     A = _as_float(mps_inputs.get("A", None), _as_float(mps_inputs.get("order_cost", 0.0), 0.0))
     time_base = mps_inputs.get("time_base", "por mês")  # "por mês" ou "por ano"
@@ -365,15 +363,44 @@ with tabs[2]:
     r = mps_inputs.get("r", None)
     pi_shortage = _as_float(mps_inputs.get("pi_shortage", None), _as_float(mps_inputs.get("shortage_cost", 0.0), 0.0))
 
-    # Converte H para base mensal
+    # D e p (apenas para referência visual no topo; se não houver, mostramos '—')
+    D_month = _as_float(mps_inputs.get("D_month", mps_inputs.get("D", None)), 0.0)
+    p_month = _as_float(mps_inputs.get("p_month", mps_inputs.get("p", None)), 0.0)
+    if mps_inputs.get("time_base", "por mês") == "por ano":
+        # se o usuário cadastrou por ano, convertemos para mostrar a taxa mensal
+        D_month = D_month / 12.0 if D_month else 0.0
+        p_month = p_month / 12.0 if p_month else 0.0
+
+    # Converte H para base mensal (para custos)
     if h_mode == "Informar H diretamente":
         H_mensal = _as_float(H_direct, 0.0)
         if time_base == "por ano":
             H_mensal = H_mensal / 12.0
+        r_show = _as_float(r, 0.0)  # apenas para exibir no topo se houver
     else:
         r_val = _as_float(r, 0.0)
         H_calc = r_val * v
         H_mensal = H_calc if time_base == "por mês" else (H_calc / 12.0)
+        r_show = r_val
+
+    # ---------- Cabeçalho: variáveis usadas (lembrança) ----------
+    with st.expander("ℹ️ Variáveis & entradas usadas (vindas do 05_Inputs_MPS)"):
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("A (setup/encomenda)", _safe(A, 2))
+        a2.metric("v (valor unit.)", _safe(v, 2))
+        a3.metric("H_mensal (R$/un·mês)", _safe(H_mensal, 4))
+        a4.metric("π (custo ruptura)", _safe(pi_shortage, 2))
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("D (média mensal)", _safe(D_month, 2))
+        b2.metric("p (produção mensal)", _safe(p_month, 2))
+        b3.metric("r (taxa man.)", _safe(r_show, 4))
+        b4.metric("Base informada", time_base)
+
+        st.caption(
+            "Convenções (EPQ): **A**=custo fixo por setup/encomenda; **D**=taxa de demanda; **p**=taxa de produção; "
+            "**v**=valor unitário; **H**=custo de manter por unidade e por período (aqui exibido em base **mensal**); "
+            "**r**=taxa de manutenção (quando utilizado para calcular H via **H = r·v**); **π**=custo de ruptura."
+        )
 
     # ---------- Cálculo dos custos ----------
     cost_produzir   = total_prod * v
@@ -394,21 +421,20 @@ with tabs[2]:
     cA, cB = st.columns(2)
     with cA:
         st.metric("Custo de produzir (R$)", _safe(cost_produzir, 2))
+        st.caption(f"Fórmula: **Σ(Qtde. MPS) × v** → { _safe(total_prod,0) } × { _safe(v,2) }")
         st.metric("Custo de manter (R$)", _safe(cost_manter, 2))
+        st.caption(f"Fórmula: **Σ(Estoque_mês) × H_mensal** → { _safe(total_estoque,0) } × { _safe(H_mensal,4) }")
     with cB:
         st.metric("Custo de encomendar (R$)", _safe(cost_encomendar, 2))
+        st.caption(f"Fórmula: **(#meses com pedido) × A** → { order_count } × { _safe(A,2) }")
         st.metric("Custo de ruptura (R$)", _safe(cost_ruptura, 2))
+        st.caption(f"Fórmula: **Σ(Ruptura) × π** → { _safe(total_ruptura,0) } × { _safe(pi_shortage,2) }")
 
     st.markdown("#### Custo relevante total")
     st.metric("Total (R$)", _safe(cost_total, 2))
-
     st.caption(
-        "Como calculamos: "
-        "• **Produzir** = Σ(Qtde. MPS) × **v**. "
-        "• **Encomendar** = (nº de períodos com pedido) × **A**. "
-        "• **Manter** = Σ(Estoque do mês) × **H_mensal** (se você informou **H** por ano, dividimos por 12; "
-        "se informou **r**, usamos **H = r·v** e aplicamos a mesma conversão). "
-        "• **Ruptura** = Σ(Ruptura) × **π**."
+        "Observação: se **H** foi informado por **ano**, convertemos para mês dividindo por 12. "
+        "Se você optou por **r** e **v**, usamos **H = r·v** (e aplicamos a mesma conversão de base quando necessário)."
     )
 
 # ======================================================
