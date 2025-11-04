@@ -416,7 +416,7 @@ with tabs[2]:
         a1, a2, a3, a4 = st.columns(4)
         a1.metric("A (setup)", _safe(A, 2))
         a2.metric("v (valor unit.)", _safe(v, 2))
-        a3.metric("H mensal (R$/un·mês)", _safe(H_m, 4))
+        a3.metric("H mensal (R$/un·mês)", _safe(H_m, 2))
         a4.metric("π (ruptura)", _safe(pi_shortage, 2))
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("D (unid/mês)", _safe(D_m, 2))
