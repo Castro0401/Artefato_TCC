@@ -293,7 +293,7 @@ except Exception as e:
 # =========================
 # Recomendações
 # =========================
-st.subheader("Recomendações (automáticas)")
+st.subheader("Recomendações")
 recs = []
 
 # tipo de demanda

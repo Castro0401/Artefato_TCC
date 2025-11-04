@@ -180,6 +180,11 @@ with tabs[0]:
     st.caption(f"**RMSE:** {_avaliar_rmse(rmse)}")
     st.caption(f"**MAPE:** {_avaliar_mape(mape)}")
 
+    st.info(
+    "Erros mais altos **não significam necessariamente** que a previsão esteja ruim. "
+    "Eles podem indicar que a série temporal é **complexa e/ou intermitente** (com muitos zeros, picos e lacunas). "
+    "Nesses casos, vale complementar com **pré-processamento** e técnicas específicas")
+
     st.divider()
 
 # ======================================================
@@ -765,9 +770,13 @@ with tabs[3]:
     st.divider()
 
     # ======================================================
-    # BLOCO: Simulador interativo de Q (política FX)
+    # BLOCO: Simulador interativo de Q (política FX) — HORIZONTE TRAVADO
     # ======================================================
     st.subheader("What-if — impacto do tamanho de lote Q (FX) no custo")
+
+    # Horizonte travado no mesmo da previsão (página 04)
+    HORIZ_BASE = int(st.session_state.get("forecast_h", len(st.session_state.get("forecast_df", [])) or 1))
+    st.caption(f"Horizonte de comparação travado em **{HORIZ_BASE} meses** (igual ao da previsão).")
 
     # Caixa de parâmetros do simulador
     with st.container(border=True):
@@ -797,35 +806,29 @@ with tabs[3]:
                 help="Custo mensal por unidade mantida em estoque."
             )
 
-        # Linha 2: Q, horizonte e SS extra (opcional) para ver efeito na manutenção
-        c5, c6, c7 = st.columns([1,1,1])
+        # Linha 2: Q e SS extra (sem horizonte — está travado)
+        c5, c6 = st.columns([1,1])
         with c5:
             # valor inicial de Q vindo da política atual, se existir
-            q_init = Q_fx if Q_fx > 0 else max(1, int(D_lbl))
+            q_init = Q_fx if 'Q_fx' in locals() and Q_fx > 0 else max(1, int(D_lbl) if D_lbl > 0 else 1)
             Q_user = st.number_input(
                 "Q — Tamanho do lote (unid)",
                 value=float(q_init), min_value=1.0, step=1.0, format="%.0f",
                 help="Valor do lote para a política **FX** no cenário simulado."
             )
         with c6:
-            meses_sim = st.number_input(
-                "Horizonte (meses)",
-                value=int(HORIZ_MESES), min_value=1, step=1,
-                help="Usamos para multiplicar os custos mensais."
-            )
-        with c7:
             ss_extra = st.number_input(
                 "SS adicional (unid/mês) (opcional)",
                 value=0.0, min_value=0.0, step=1.0, format="%.0f",
                 help="Só para ver sensibilidade: adiciona estoque médio constante para custo de manter."
             )
 
-    # Funções de custo
+    # Funções de custo (mensais)
     def cost_setup_month(A, D, Q):
         return A * (D / max(Q, 1e-9))
 
     def cost_holding_month(H, Q, D, p):
-        # Fórmula EPQ: I_médio = (Q/2)*(1 - D/p). Se p<=D, não existe estoque durante produção (retorna 0).
+        # Fórmula EPQ: I_médio = (Q/2) * (1 - D/p). Se p<=D, não há estoque durante produção.
         if p <= D:
             return 0.0
         fator = (1.0 - D / p)
@@ -837,9 +840,14 @@ with tabs[3]:
     hold_m  = cost_holding_month(H_lbl, Q_user, D_lbl, p_lbl) + H_lbl * ss_extra
     total_m = setup_m + hold_m
 
+    # Custos no horizonte TRAVADO
+    meses_sim = HORIZ_BASE  # <- travado
     cost_setup_total = setup_m * meses_sim
     cost_hold_total  = hold_m  * meses_sim
     cost_total_sim   = cost_setup_total + cost_hold_total
+
+    # Espaço para respirar da UI
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # Cards de resultado do cenário
     L, R = st.columns(2)
@@ -850,11 +858,12 @@ with tabs[3]:
         st.metric("Total (R$)", _safe(cost_total_sim, 2))
     with R:
         st.markdown("#### Parâmetros usados")
-        st.write(f"- Q = **{_safe(Q_user,0)}** un")
-        st.write(f"- A = **R$ {_safe(A_lbl,2)}**, H = **R$ {_safe(H_lbl,4)} /un·mês**")
-        st.write(f"- D = **{_safe(D_lbl,2)}** un/mês, p = **{_safe(p_lbl,2)}** un/mês")
+        st.write(f"- Q = {_safe(Q_user,0)} un")
+        st.write(f"- A = R$ {_safe(A_lbl,2)}; H = R$ {_safe(H_lbl,4)} /un·mês")
+        st.write(f"- D = {_safe(D_lbl,2)} un/mês; p = {_safe(p_lbl,2)} un/mês")
+        st.write(f"- Horizonte = {meses_sim} meses (travado)")
         if p_lbl <= D_lbl:
-            st.warning("Com **p ≤ D**, a parte de **manter** pelo EPQ fica 0 (sem estoque em produção).")
+            st.warning("Com **p ≤ D**, a parcela de **manter** pelo EPQ fica 0 (sem estoque em produção).")
         if ss_extra > 0:
             st.info(f"Considerando **SS_extra = {_safe(ss_extra,0)}** un/mês no custo de manter.")
 
@@ -912,7 +921,7 @@ with tabs[3]:
     # ------------------------------------------------------
     # Comparação com MPS atual (se existir)
     # ------------------------------------------------------
-    st.markdown("##### Comparação rápida com o plano atual (se disponível)")
+    st.markdown("##### Comparação rápida com o MPS atual (Gerado na página 06)")
     base_setup_total = None
     base_hold_total = None
     base_total = None
@@ -930,10 +939,10 @@ with tabs[3]:
 
     colA, colB, colC = st.columns(3)
     with colA:
-        st.metric("Cenário (Q informado) — Total (R$)", _safe(cost_total_sim, 2))
+        st.metric("Cenário (MPS Simulado) — Total (R$)", _safe(cost_total_sim, 2))
     with colB:
         if base_total is not None:
-            st.metric("Plano atual — Total (R$)", _safe(base_total, 2))
+            st.metric("MPS atual — Total (R$)", _safe(base_total, 2))
         else:
             st.caption("Plano atual indisponível para comparação.")
     with colC:
