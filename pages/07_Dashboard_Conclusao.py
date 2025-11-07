@@ -802,7 +802,7 @@ with tabs[3]:
         with c4:
             H_lbl = st.number_input(
                 "Custo de manter H (R$/un·mês)",
-                value=float(H_m), step=1.0, min_value=0.0, format="%.4f",
+                value=float(H_m), step=1.0, min_value=0.0, format="%.2f",
                 help="Custo mensal por unidade mantida em estoque."
             )
 
