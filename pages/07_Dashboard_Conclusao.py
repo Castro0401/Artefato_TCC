@@ -516,81 +516,77 @@ with tabs[2]:
                    "Ajuste no **05_Inputs_MPS**.")
 
     # =============================
-    # ATP — mensal derivado do ATP(cum) (ordem idêntica ao MPS)
+    # ATP — mensal (prioriza mps_detail['atp']) com ordem do MPS
     # =============================
     st.divider()
     st.markdown("## 🧮 ATP — Capacidade de atender novas demandas (por mês)")
 
-    # Ordem de meses vem da tabela do MPS
-    atp_index = list(mps_tbl_display.columns)  # esta é a ordem que queremos preservar
+    atp_index = list(mps_tbl_display.columns)  # ordem oficial (mesma do MPS)
 
-    # Tenta obter linha "ATP(cum)" e derivar mensal por diferença
-    def _monthly_atp_from_cum(df_disp: pd.DataFrame) -> pd.Series | None:
-        try:
-            idx_norm = df_disp.index.astype(str).str.strip().str.lower()
-            m = (idx_norm == "atp(cum)".lower())
-            if not m.any():
-                return None
-            row = df_disp.loc[df_disp.index[m][0]]
-            cum_vals = pd.to_numeric(row.values, errors="coerce").fillna(0.0).values.astype(float)
-            monthly = np.diff(np.r_[0.0, cum_vals])
-            monthly = np.clip(monthly, 0, None)  # evita negativos
-            return pd.Series(monthly, index=df_disp.columns)
-        except Exception:
-            return None
-
-    atp_monthly_series = _monthly_atp_from_cum(mps_tbl_display)
-
-    # Fallback: se não houver ATP(cum), tentar mps_detail['atp']
-    if atp_monthly_series is None:
-        mps_detail = st.session_state.get("mps_detail", None)
-        if isinstance(mps_detail, pd.DataFrame) and ("atp" in mps_detail.columns):
-            vals = pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0.0).values
-            if len(vals) < len(atp_index):
-                vals = np.pad(vals, (0, len(atp_index) - len(vals)), constant_values=0.0)
-            atp_monthly_series = pd.Series(vals[:len(atp_index)], index=atp_index)
-
-    # Caso ainda não tenha ATP
-    if atp_monthly_series is None:
-        st.info("Não encontrei o **ATP** no resultado. Gere o MPS novamente ou habilite o cálculo de ATP no core.")
-    else:
-        # ======== Função para alinhar e garantir ordem ========
-        def _to_series_aligned(obj, index_order: list[str]) -> pd.Series:
-            """
-            Converte obj (Series/list/ndarray) para Series e alinha pela ordem em index_order.
-            Se não houver índice, assume a ordem recebida e completa com zeros.
-            """
-            if isinstance(obj, pd.Series):
-                s = obj.copy()
-                try:
-                    return pd.to_numeric(s.reindex(index_order), errors="coerce").fillna(0.0)
-                except Exception:
-                    pass
+    def _align_series(obj, index_order: list[str]) -> pd.Series:
+        """Converte obj para Series float e alinha pela ordem de index_order."""
+        if isinstance(obj, pd.Series):
+            s = pd.to_numeric(obj, errors="coerce")
+            try:
+                s = s.reindex(index_order)
+            except Exception:
                 s = s.reset_index(drop=True)
-                s = s.iloc[:len(index_order)]
                 s.index = index_order[:len(s)]
-                if len(s) < len(index_order):
-                    s = s.reindex(index_order, fill_value=0.0)
-                return pd.to_numeric(s, errors="coerce").fillna(0.0)
+                s = s.reindex(index_order)
+            return s.fillna(0.0).astype(float)
+        arr = np.asarray(obj, dtype=float)
+        arr = np.where(np.isfinite(arr), arr, 0.0)
+        if len(arr) < len(index_order):
+            arr = np.pad(arr, (0, len(index_order) - len(arr)), constant_values=0.0)
+        else:
+            arr = arr[:len(index_order)]
+        return pd.Series(arr, index=index_order, dtype=float)
 
-            arr = np.asarray(obj, dtype=float)
-            arr = np.where(np.isfinite(arr), arr, 0.0)
-            if len(arr) >= len(index_order):
-                arr = arr[:len(index_order)]
-            else:
-                arr = np.pad(arr, (0, len(index_order) - len(arr)), constant_values=0.0)
-            return pd.Series(arr, index=index_order, dtype=float)
+    def _from_mps_detail_monthly() -> pd.Series | None:
+        md = st.session_state.get("mps_detail", None)
+        if isinstance(md, pd.DataFrame) and ("atp" in md.columns):
+            return _align_series(md["atp"].values, atp_index)
+        return None
 
-        # ======== Montagem do DF ========
-        atp_series_aligned = _to_series_aligned(atp_monthly_series, atp_index)
+    def _from_display_row_named(names: list[str]) -> pd.Series | None:
+        idx_norm = mps_tbl_display.index.astype(str).str.strip().str.lower()
+        for nm in names:
+            m = (idx_norm == nm.strip().lower())
+            if m.any():
+                row = mps_tbl_display.loc[mps_tbl_display.index[m][0]]
+                return _align_series(pd.to_numeric(row.values, errors="coerce"), atp_index)
+        return None
+
+    def _from_cumulative_diff() -> pd.Series | None:
+        s_cum = _from_display_row_named(["atp(cum)", "atp acum", "atp acumulado"])
+        if s_cum is None:
+            return None
+        cum_vals = s_cum.values.astype(float)
+        monthly = np.diff(np.r_[0.0, cum_vals])
+        monthly = np.clip(monthly, 0, None)
+        return pd.Series(monthly, index=atp_index, dtype=float)
+
+    # 1) Fonte PRIORITÁRIA: mensal do mps_detail
+    atp_monthly = _from_mps_detail_monthly()
+
+    # 2) Fallback: linha "ATP" (mensal) na tabela (se existir)
+    if atp_monthly is None:
+        atp_monthly = _from_display_row_named(["atp"])
+
+    # 3) Último fallback: derivar do acumulado
+    if atp_monthly is None:
+        atp_monthly = _from_cumulative_diff()
+
+    if atp_monthly is None:
+        st.info("Não foi possível determinar o ATP mensal. Gere o MPS novamente ou habilite o ATP no core.")
+    else:
         atp_df = pd.DataFrame({
             "Mês": atp_index,
-            "ATP (unid/mês)": atp_series_aligned.values.astype(int)
+            "ATP (unid/mês)": atp_monthly.astype(float).round(0).astype(int).values
         })
         atp_df["Mês"] = pd.Categorical(atp_df["Mês"], categories=atp_index, ordered=True)
         atp_df = atp_df.sort_values("Mês", kind="stable").reset_index(drop=True)
 
-        # ======== Demanda extra ========
         extra = st.number_input(
             "Demanda extra hipotética (un/mês)", min_value=0, step=1, value=0,
             help="Valor fixo de nova demanda a testar em cada mês."
@@ -598,7 +594,6 @@ with tabs[2]:
         atp_df["Demanda extra"] = int(extra)
         atp_df["Atende"] = atp_df["ATP (unid/mês)"] >= atp_df["Demanda extra"]
 
-        # ======== Gráfico ========
         import altair as alt
         color_scale = alt.Scale(domain=[True, False], range=["#16a34a", "#dc2626"])
 
@@ -629,10 +624,8 @@ with tabs[2]:
             use_container_width=True
         )
 
-        # ======== Tabela e resumo ========
         atp_df["✔ Atende?"] = atp_df["Atende"].map({True:"✅", False:"❌"})
-        show_df = atp_df[["Mês", "ATP (unid/mês)", "✔ Atende?"]]
-        st.dataframe(show_df, use_container_width=True, height=280)
+        st.dataframe(atp_df[["Mês", "ATP (unid/mês)", "✔ Atende?"]], use_container_width=True, height=280)
 
         if extra > 0:
             meses_ok = atp_df.loc[atp_df["Atende"], "Mês"].astype(str).tolist()
@@ -642,6 +635,7 @@ with tabs[2]:
                 st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP suficiente.")
         else:
             st.caption("Ajuste a demanda extra acima para testar cenários.")
+
 
 # ======================================================
 # TAB 4 — Recomendações + “What-if” de Q (FX)
