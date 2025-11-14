@@ -532,32 +532,33 @@ with tabs[2]:
                 return df.loc[lbl]
         return None
 
-    # 1) Tenta pegar diretamente a linha ATP(cum)
-    atp_index = list(mps_tbl_display.columns)  # ordem original das colunas do MPS
+    # 1) pegar diretamente a linha ATP(cum) na ORDEM das colunas do MPS
+    atp_cum_series: pd.Series | None = None
+
     row_atp_cum = _find_row_casefold(
         mps_tbl_display,
         ["ATP(cum)", "atp(cum)", "ATP acumulado", "atp acumulado"]
     )
 
-    atp_cum_series: pd.Series | None = None
-
     if row_atp_cum is not None:
-        # força para Series alinhada ao índice de colunas do MPS
-        s_atp = pd.Series(row_atp_cum, index=atp_index)
-        atp_vals = pd.to_numeric(s_atp, errors="coerce").fillna(0).astype(float)
-        atp_cum_series = pd.Series(atp_vals.values, index=atp_index)
+        # mantém exatamente a ordem das colunas da tabela do MPS
+        col_labels = list(mps_tbl_display.columns)
+        s_atp = pd.Series(row_atp_cum, index=col_labels)
+        vals = pd.to_numeric(s_atp.values, errors="coerce").fillna(0).astype(float)
+        atp_cum_series = pd.Series(vals, index=col_labels)
 
-    # 2) Fallback (se não achar ATP(cum), tenta estoque projetado e usa como proxy)
+    # 2) fallback: estoque projetado como proxy, se não achar ATP(cum)
     if atp_cum_series is None:
         row_stock = _find_row_casefold(
             mps_tbl_display,
             ["Estoque proj.", "estoque proj.", "estoque projetado"]
         )
         if row_stock is not None:
-            s_stock = pd.Series(row_stock, index=atp_index)
-            vals = pd.to_numeric(s_stock, errors="coerce").fillna(0).astype(float)
+            col_labels = list(mps_tbl_display.columns)
+            s_stock = pd.Series(row_stock, index=col_labels)
+            vals = pd.to_numeric(s_stock.values, errors="coerce").fillna(0).astype(float)
             vals = np.clip(vals, 0, None)
-            atp_cum_series = pd.Series(vals, index=atp_index)
+            atp_cum_series = pd.Series(vals, index=col_labels)
 
     if atp_cum_series is None:
         st.info(
@@ -565,21 +566,24 @@ with tabs[2]:
             "Gere o MPS novamente (página 06) com o cálculo de ATP habilitado."
         )
     else:
-        # 3) Garante ORDEM cronológica usando a série da previsão
-        if "forecast_df" in st.session_state:
-            ordem_labels = st.session_state["forecast_df"]["ds"].tolist()
-        else:
-            ordem_labels = list(atp_cum_series.index)
+        # 3) formata rótulos de mês (se forem datas, vira 'Set/25'; caso contrário, usa o texto original)
+        PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
 
-        atp_ord = atp_cum_series.reindex(ordem_labels)
-        atp_ord = atp_ord.fillna(method="ffill").fillna(0)
+        def _fmt_mes(lbl):
+            try:
+                ts = pd.to_datetime(lbl)
+                return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
+            except Exception:
+                return str(lbl)
+
+        meses_fmt = [_fmt_mes(m) for m in atp_cum_series.index]
 
         plot_df = pd.DataFrame({
-            "Mês": atp_ord.index,
-            "ATP acumulado (unid)": atp_ord.values.astype(int)
+            "Mês": meses_fmt,
+            "ATP acumulado (unid)": atp_cum_series.values.astype(int)
         })
 
-        # 4) Simulador de demanda extra ACUMULADA
+        # 4) simulador de demanda extra ACUMULADA
         extra = st.number_input(
             "Demanda extra hipotética (un/mês)",
             min_value=0,
@@ -589,8 +593,8 @@ with tabs[2]:
         )
 
         n = len(plot_df)
-        idx = np.arange(1, n + 1)                # 1º mês, 2º mês, ...
-        demanda_acum = extra * idx              # demanda extra acumulada até cada mês
+        idx = np.arange(1, n + 1)
+        demanda_acum = extra * idx
 
         plot_df["Demanda extra acumulada"] = demanda_acum
         plot_df["Atende"] = plot_df["ATP acumulado (unid)"] >= demanda_acum
@@ -604,7 +608,7 @@ with tabs[2]:
 
         # Barras (ATP acumulado)
         bars = alt.Chart(plot_df).mark_bar().encode(
-            x=alt.X("Mês:N", sort=plot_df["Mês"].tolist(), title="Mês"),
+            x=alt.X("Mês:N", sort=None, title="Mês"),  # sort=None mantém a ordem do DataFrame
             y=alt.Y("ATP acumulado (unid):Q", title="ATP acumulado (unid)"),
             color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
             tooltip=[
@@ -618,9 +622,10 @@ with tabs[2]:
         # Linha da demanda extra acumulada
         line = alt.Chart(plot_df).mark_line(
             strokeDash=[6, 4],
-            strokeWidth=2
+            strokeWidth=2,
+            color="#0f172a"
         ).encode(
-            x=alt.X("Mês:N", sort=plot_df["Mês"].tolist(), title="Mês"),
+            x=alt.X("Mês:N", sort=None),
             y=alt.Y("Demanda extra acumulada:Q", title=None),
             tooltip=[alt.Tooltip("Demanda extra acumulada:Q", format=",.0f")]
         )
@@ -628,12 +633,12 @@ with tabs[2]:
         # Rótulos nas barras
         labels = alt.Chart(plot_df).mark_text(
             dy=-6,
-            fontSize=11
+            fontSize=11,
+            color="#111827"
         ).encode(
-            x=alt.X("Mês:N", sort=plot_df["Mês"].tolist()),
+            x=alt.X("Mês:N", sort=None),
             y=alt.Y("ATP acumulado (unid):Q", stack=None),
-            text=alt.Text("ATP acumulado (unid):Q", format=",.0f"),
-            color=alt.value("#111827")
+            text=alt.Text("ATP acumulado (unid):Q", format=",.0f")
         )
 
         st.altair_chart(
@@ -646,7 +651,7 @@ with tabs[2]:
             use_container_width=True
         )
 
-        # 5) Tabela e resumo
+        # 5) tabela e resumo
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
         plot_df["✔ Atende?"] = plot_df["Atende"].map({True: "✅", False: "❌"})
@@ -665,6 +670,7 @@ with tabs[2]:
                 st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP acumulado suficiente.")
         else:
             st.caption("Ajuste a demanda extra acima para testar cenários com ATP acumulado.")
+
 
 
 # ======================================================
