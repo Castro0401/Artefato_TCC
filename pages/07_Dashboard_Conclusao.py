@@ -534,50 +534,63 @@ with tabs[2]:
             row = df_disp.loc[df_disp.index[m][0]]
             cum_vals = pd.to_numeric(row.values, errors="coerce").fillna(0.0).values.astype(float)
             monthly = np.diff(np.r_[0.0, cum_vals])
-            monthly = np.clip(monthly, 0, None)  # nada negativo
+            monthly = np.clip(monthly, 0, None)  # evita negativos
             return pd.Series(monthly, index=df_disp.columns)
         except Exception:
             return None
 
     atp_monthly_series = _monthly_atp_from_cum(mps_tbl_display)
 
-    # Fallback: se não houver ATP(cum), tentar mps_detail['atp'] (e alinhar à ordem)
+    # Fallback: se não houver ATP(cum), tentar mps_detail['atp']
     if atp_monthly_series is None:
         mps_detail = st.session_state.get("mps_detail", None)
         if isinstance(mps_detail, pd.DataFrame) and ("atp" in mps_detail.columns):
-            # Tenta mapear labels de forecast_df para a mesma máscara do display
-            labels_ds = st.session_state.get("forecast_df", pd.DataFrame()).get("ds", pd.Series([], dtype="datetime64[ns]"))
-            PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
-            def _fmt(ts): 
-                ts = pd.to_datetime(ts); return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
-            labels_fmt = [_fmt(x) for x in labels_ds] if len(labels_ds) else []
-            vals_map = {}
-            try:
-                if "ds" in mps_detail.columns:
-                    # Se vier com as datas, formata igual
-                    _fmt_series = [_fmt(x) for x in pd.to_datetime(mps_detail["ds"])]
-                    for k, v in zip(_fmt_series, pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0.0).values):
-                        vals_map[k] = float(max(0.0, v))
-                else:
-                    # Caso só tenha a coluna 'atp', alinhar pela ordem das labels_fmt
-                    for k, v in zip(labels_fmt, pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0.0).values):
-                        vals_map[k] = float(max(0.0, v))
-            except Exception:
-                vals_map = {}
-            aligned = [vals_map.get(k, 0.0) for k in atp_index]
-            atp_monthly_series = pd.Series(aligned, index=atp_index)
+            vals = pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0.0).values
+            if len(vals) < len(atp_index):
+                vals = np.pad(vals, (0, len(atp_index) - len(vals)), constant_values=0.0)
+            atp_monthly_series = pd.Series(vals[:len(atp_index)], index=atp_index)
 
+    # Caso ainda não tenha ATP
     if atp_monthly_series is None:
         st.info("Não encontrei o **ATP** no resultado. Gere o MPS novamente ou habilite o cálculo de ATP no core.")
     else:
-        # Monta DF na ordem correta (categorical)
+        # ======== Função para alinhar e garantir ordem ========
+        def _to_series_aligned(obj, index_order: list[str]) -> pd.Series:
+            """
+            Converte obj (Series/list/ndarray) para Series e alinha pela ordem em index_order.
+            Se não houver índice, assume a ordem recebida e completa com zeros.
+            """
+            if isinstance(obj, pd.Series):
+                s = obj.copy()
+                try:
+                    return pd.to_numeric(s.reindex(index_order), errors="coerce").fillna(0.0)
+                except Exception:
+                    pass
+                s = s.reset_index(drop=True)
+                s = s.iloc[:len(index_order)]
+                s.index = index_order[:len(s)]
+                if len(s) < len(index_order):
+                    s = s.reindex(index_order, fill_value=0.0)
+                return pd.to_numeric(s, errors="coerce").fillna(0.0)
+
+            arr = np.asarray(obj, dtype=float)
+            arr = np.where(np.isfinite(arr), arr, 0.0)
+            if len(arr) >= len(index_order):
+                arr = arr[:len(index_order)]
+            else:
+                arr = np.pad(arr, (0, len(index_order) - len(arr)), constant_values=0.0)
+            return pd.Series(arr, index=index_order, dtype=float)
+
+        # ======== Montagem do DF ========
+        atp_series_aligned = _to_series_aligned(atp_monthly_series, atp_index)
         atp_df = pd.DataFrame({
             "Mês": atp_index,
-            "ATP (unid/mês)": pd.to_numeric(atp_monthly_series.reindex(atp_index).values, errors="coerce").fillna(0).astype(int)
+            "ATP (unid/mês)": atp_series_aligned.values.astype(int)
         })
         atp_df["Mês"] = pd.Categorical(atp_df["Mês"], categories=atp_index, ordered=True)
         atp_df = atp_df.sort_values("Mês", kind="stable").reset_index(drop=True)
 
+        # ======== Demanda extra ========
         extra = st.number_input(
             "Demanda extra hipotética (un/mês)", min_value=0, step=1, value=0,
             help="Valor fixo de nova demanda a testar em cada mês."
@@ -585,24 +598,29 @@ with tabs[2]:
         atp_df["Demanda extra"] = int(extra)
         atp_df["Atende"] = atp_df["ATP (unid/mês)"] >= atp_df["Demanda extra"]
 
-        # Gráfico
+        # ======== Gráfico ========
+        import altair as alt
         color_scale = alt.Scale(domain=[True, False], range=["#16a34a", "#dc2626"])
+
         bars = alt.Chart(atp_df).mark_bar().encode(
             x=alt.X("Mês:N", title="Mês", sort=atp_index),
             y=alt.Y("ATP (unid/mês):Q", title="ATP (unid/mês)", scale=alt.Scale(nice=True, zero=True)),
             color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
             tooltip=["Mês", alt.Tooltip("ATP (unid/mês):Q", format=",.0f"), "Atende"]
         )
+
         labels = alt.Chart(atp_df).mark_text(dy=-6, fontSize=11).encode(
             x=alt.X("Mês:N", sort=atp_index),
             y=alt.Y("ATP (unid/mês):Q", stack=None),
             text=alt.Text("ATP (unid/mês):Q", format=",.0f"),
             color=alt.value("#111827")
         )
+
         threshold = alt.Chart(atp_df).mark_rule(color="#0f172a", strokeDash=[6,4]).encode(
             y="Demanda extra:Q",
             x=alt.X("Mês:N", sort=atp_index)
         )
+
         st.altair_chart(
             (bars + labels + threshold).properties(
                 height=340, width="container",
@@ -611,8 +629,9 @@ with tabs[2]:
             use_container_width=True
         )
 
-        # Tabela e resumo
-        show_df = atp_df[["Mês", "ATP (unid/mês)"]].copy()
+        # ======== Tabela e resumo ========
+        atp_df["✔ Atende?"] = atp_df["Atende"].map({True:"✅", False:"❌"})
+        show_df = atp_df[["Mês", "ATP (unid/mês)", "✔ Atende?"]]
         st.dataframe(show_df, use_container_width=True, height=280)
 
         if extra > 0:
@@ -623,7 +642,6 @@ with tabs[2]:
                 st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP suficiente.")
         else:
             st.caption("Ajuste a demanda extra acima para testar cenários.")
-
 
 # ======================================================
 # TAB 4 — Recomendações + “What-if” de Q (FX)
