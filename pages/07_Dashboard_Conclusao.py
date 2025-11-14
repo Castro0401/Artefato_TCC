@@ -516,154 +516,156 @@ with tabs[2]:
                    "Ajuste no **05_Inputs_MPS**.")
 
     # =============================
-    # ATP — ACUMULADO (igual à última linha do MPS)
+    # ATP ACUMULADO — “dá pra atender novas demandas ao longo do horizonte?”
     # =============================
     st.divider()
-    st.markdown("## 🧮 ATP acumulado (até cada mês)")
+    st.markdown("### 🧮 ATP acumulado (até cada mês)")
 
-    def _find_row_casefold(df: pd.DataFrame, names: list[str]) -> pd.Series | None:
-        """Procura uma linha pelo nome (case-insensitive, com trim)."""
-        idx_norm = df.index.astype(str).str.strip().str.casefold()
-        for name in names:
-            tgt = str(name).strip().casefold()
-            m = idx_norm == tgt
-            if m.any():
-                lbl = df.index[m][0]
-                return df.loc[lbl]
-        return None
-
-        # 1) pegar diretamente a linha ATP(cum) na ORDEM das colunas do MPS
-    atp_cum_series: pd.Series | None = None
-
-    row_atp_cum = _find_row_casefold(
+    # 1) Pegar a linha ATP(cum) da tabela do MPS (última linha do quadro)
+    row_atp_cum = _find_row(
         mps_tbl_display,
         ["ATP(cum)", "atp(cum)", "ATP acumulado", "atp acumulado"]
     )
 
-    if row_atp_cum is not None:
+    if row_atp_cum is None:
+        st.info(
+            "Não encontrei a linha **ATP(cum)** na tabela do MPS. "
+            "Confira a planilha gerada na página **06_MPS**."
+        )
+    else:
+        # Mantém exatamente a ordem das colunas do MPS
         col_labels = list(mps_tbl_display.columns)
         s_atp = pd.Series(row_atp_cum, index=col_labels)
-        vals = pd.to_numeric(s_atp, errors="coerce").fillna(0).astype(float).to_numpy()
-        atp_cum_series = pd.Series(vals, index=col_labels)
 
-    # 2) fallback: estoque projetado como proxy, se não achar ATP(cum)
-    if atp_cum_series is None:
-        row_stock = _find_row_casefold(
-            mps_tbl_display,
-            ["Estoque proj.", "estoque proj.", "estoque projetado"]
+        # Garante que tudo é número (NaN -> 0), depois vira array
+        atp_vals = (
+            pd.to_numeric(s_atp, errors="coerce")
+            .fillna(0)
+            .astype(float)
+            .to_numpy()
         )
-        if row_stock is not None:
-            col_labels = list(mps_tbl_display.columns)
-            s_stock = pd.Series(row_stock, index=col_labels)
-            vals = pd.to_numeric(s_stock, errors="coerce").fillna(0).astype(float).to_numpy()
-            vals = np.clip(vals, 0, None)
-            atp_cum_series = pd.Series(vals, index=col_labels)
 
-        # 3) formata rótulos de mês (se forem datas, vira 'Set/25'; caso contrário, usa o texto original)
-        PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+        # Série acumulada (já vem acumulada, só organizamos em série)
+        atp_cum_series = pd.Series(atp_vals, index=col_labels)
 
-        def _fmt_mes(lbl):
-            try:
-                ts = pd.to_datetime(lbl)
-                return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
-            except Exception:
-                return str(lbl)
+        # Labels legíveis para o eixo X, mantendo ORDEM
+        try:
+            idx_dt = pd.to_datetime(atp_cum_series.index)
+            PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun",
+                      "Jul","Ago","Set","Out","Nov","Dez"]
+            pretty_idx = [f"{PT_MON[d.month-1]}/{d.year%100:02d}" for d in idx_dt]
+        except Exception:
+            # Se não forem datas, usa como string mesmo
+            pretty_idx = [str(x) for x in atp_cum_series.index]
 
-        meses_fmt = [_fmt_mes(m) for m in atp_cum_series.index]
-
-        plot_df = pd.DataFrame({
-            "Mês": meses_fmt,
-            "ATP acumulado (unid)": atp_cum_series.values.astype(int)
+        # DataFrame base
+        atp_df = pd.DataFrame({
+            "Mês": pretty_idx,
+            "ATP acumulado (unid)": atp_cum_series.values.astype(float),
         })
 
-        # 4) simulador de demanda extra ACUMULADA
+        # 2) Simulador: demanda extra FIXA por mês -> acumulada ao longo do horizonte
         extra = st.number_input(
             "Demanda extra hipotética (un/mês)",
             min_value=0,
             step=1,
             value=0,
-            help="Demanda extra fixa por mês. Compara o ATP acumulado com a demanda extra acumulada."
+            help="Quantidade adicional fixa de demanda em cada mês, "
+                 "acumulada ao longo do horizonte."
         )
 
-        n = len(plot_df)
-        idx = np.arange(1, n + 1)
-        demanda_acum = extra * idx
+        n = len(atp_df)
+        atp_df["Demanda extra acumulada"] = extra * np.arange(1, n + 1)
+        atp_df["Atende?"] = (
+            atp_df["ATP acumulado (unid)"] >= atp_df["Demanda extra acumulada"]
+        )
 
-        plot_df["Demanda extra acumulada"] = demanda_acum
-        plot_df["Atende"] = plot_df["ATP acumulado (unid)"] >= demanda_acum
-
+        # 3) Gráfico: barras verdes de ATP acumulado + linha da demanda extra acumulada
         import altair as alt
+        chart_data = atp_df.copy()
 
         color_scale = alt.Scale(
             domain=[True, False],
             range=["#16a34a", "#dc2626"]  # verde / vermelho
         )
 
-        # Barras (ATP acumulado)
-        bars = alt.Chart(plot_df).mark_bar().encode(
-            x=alt.X("Mês:N", sort=None, title="Mês"),  # sort=None mantém a ordem do DataFrame
+        bars = alt.Chart(chart_data).mark_bar().encode(
+            x=alt.X("Mês:N", title="Mês", sort=None),
             y=alt.Y("ATP acumulado (unid):Q", title="ATP acumulado (unid)"),
-            color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
+            color=alt.Color(
+                "Atende?:N",
+                title="Atende a extra acumulada?",
+                scale=color_scale
+            ),
             tooltip=[
                 "Mês",
                 alt.Tooltip("ATP acumulado (unid):Q", format=",.0f"),
-                alt.Tooltip("Demanda extra acumulada:Q", format=",.0f", title="Demanda extra acum."),
-                "Atende"
-            ]
+                alt.Tooltip("Demanda extra acumulada:Q", format=",.0f"),
+                "Atende?"
+            ],
         )
 
-        # Linha da demanda extra acumulada
-        line = alt.Chart(plot_df).mark_line(
-            strokeDash=[6, 4],
-            strokeWidth=2,
-            color="#0f172a"
+        labels = alt.Chart(chart_data).mark_text(
+            dy=-6, fontSize=11
         ).encode(
-            x=alt.X("Mês:N", sort=None),
-            y=alt.Y("Demanda extra acumulada:Q", title=None),
-            tooltip=[alt.Tooltip("Demanda extra acumulada:Q", format=",.0f")]
+            x="Mês:N",
+            y="ATP acumulado (unid):Q",
+            text=alt.Text("ATP acumulado (unid):Q", format=",.0f"),
+            color=alt.value("#111827"),
         )
 
-        # Rótulos nas barras
-        labels = alt.Chart(plot_df).mark_text(
-            dy=-6,
-            fontSize=11,
-            color="#111827"
+        line = alt.Chart(chart_data).mark_line(
+            strokeDash=[6, 4]
         ).encode(
-            x=alt.X("Mês:N", sort=None),
-            y=alt.Y("ATP acumulado (unid):Q", stack=None),
-            text=alt.Text("ATP acumulado (unid):Q", format=",.0f")
+            x="Mês:N",
+            y=alt.Y("Demanda extra acumulada:Q", title=""),
+        )
+
+        points = alt.Chart(chart_data).mark_point().encode(
+            x="Mês:N",
+            y="Demanda extra acumulada:Q",
         )
 
         st.altair_chart(
-            (bars + line + labels).properties(
+            (bars + labels + line + points).properties(
                 height=340,
                 width="container",
-                title=f"ATP acumulado vs. demanda extra acumulada (extra = {extra} un/mês)"
-            ).configure_axis(labelFontSize=12, titleFontSize=12)
+                title=(
+                    "ATP acumulado vs. demanda extra acumulada "
+                    f"(extra = {extra} un/mês)"
+                ),
+            )
+            .configure_axis(labelFontSize=12, titleFontSize=12)
             .configure_legend(labelFontSize=12, titleFontSize=12),
-            use_container_width=True
+            use_container_width=True,
         )
 
-        # 5) tabela e resumo
+        # 4) Espaço visual antes da tabela
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-        plot_df["✔ Atende?"] = plot_df["Atende"].map({True: "✅", False: "❌"})
-        display_df = plot_df[["Mês", "ATP acumulado (unid)", "Demanda extra acumulada", "✔ Atende?"]]
+        # 5) Tabela resumo
+        atp_df["✔ Atende?"] = atp_df["Atende?"].map({True: "✅", False: "❌"})
+        display_df = atp_df[
+            ["Mês", "ATP acumulado (unid)", "Demanda extra acumulada", "✔ Atende?"]
+        ]
 
-        st.dataframe(display_df, use_container_width=True, height=280)
+        st.dataframe(display_df, use_container_width=True, height=260)
 
+        # 6) Mensagem de resumo
         if extra > 0:
-            meses_ok = display_df.loc[plot_df["Atende"], "Mês"].tolist()
+            meses_ok = display_df.loc[atp_df["Atende?"], "Mês"].tolist()
             if meses_ok:
                 st.success(
-                    f"Com **{extra} un/mês** de demanda extra, o ATP acumulado consegue atender até: "
-                    f"**{', '.join(meses_ok)}**."
+                    f"Com **{extra} un/mês** de demanda extra, "
+                    f"os meses atendidos são: {', '.join(meses_ok)}."
                 )
             else:
-                st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP acumulado suficiente.")
+                st.warning(
+                    f"Com **{extra} un/mês** de demanda extra, "
+                    "nenhum mês teria ATP acumulado suficiente."
+                )
         else:
-            st.caption("Ajuste a demanda extra acima para testar cenários com ATP acumulado.")
-
+            st.caption("Ajuste a demanda extra acima para testar cenários.")
 
 
 # ======================================================
