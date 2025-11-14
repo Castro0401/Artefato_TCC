@@ -539,8 +539,8 @@ with tabs[2]:
         raw = np.asarray(row_atp_cum, dtype=object)          # garante ndarray
         num = pd.to_numeric(raw, errors="coerce")            # numeric (array)
         atp_cum_vals = np.nan_to_num(num, nan=0.0).astype(float)
-# garante lista para rótulos
-atp_index = list(mps_tbl_display.columns)
+        # garante lista para rótulos
+        atp_index = list(mps_tbl_display.columns)
     else:
         # 2) Se não houver, tentar reconstruir: usa mps_detail['atp'] (mensal) e acumula com cumsum
         mps_detail = st.session_state.get("mps_detail", None)
