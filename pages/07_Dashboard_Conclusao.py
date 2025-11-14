@@ -533,34 +533,41 @@ with tabs[2]:
         return None
 
     # 1) Fonte primária: linha "ATP(cum)" do display
-    row_atp_cum = _find_row_casefold(mps_tbl_display, ["ATP(cum)", "atp(cum)", "ATP acumulado", "atp acumulado"])
+    atp_index = list(mps_tbl_display.columns)  # preserva ORDEM das colunas do MPS
 
-    atp_index = list(mps_tbl_display.columns)  # preserva ORDEM do MPS
+    row_atp_cum = _find_row_casefold(
+        mps_tbl_display,
+        ["ATP(cum)", "atp(cum)", "ATP acumulado", "atp acumulado"]
+    )
+
     atp_cum_series = None
 
     if row_atp_cum is not None:
-        # Converte para numérico e preserva ordem de colunas:
-        atp_cum_vals = pd.to_numeric(row_atp_cum.reindex(atp_index).values, errors="coerce").fillna(0).astype(float)
-        atp_cum_series = pd.Series(atp_cum_vals, index=atp_index)
+        # Garante Series com o mesmo index das colunas do MPS
+        s_atp = pd.Series(row_atp_cum, index=atp_index)
+        atp_cum_vals = pd.to_numeric(s_atp, errors="coerce").fillna(0).astype(float)
+        atp_cum_series = pd.Series(atp_cum_vals.values, index=atp_index)
 
     # 2) Fallback: tenta reconstruir ATP(cum) se não existir
     if atp_cum_series is None:
-        # Se houver estoque projetado mensal e recebimentos, poderíamos reconstruir.
-        row_stock = _find_row_casefold(mps_tbl_display, ["Estoque proj.", "estoque proj.", "estoque projetado"])
+        row_stock = _find_row_casefold(
+            mps_tbl_display,
+            ["Estoque proj.", "estoque proj.", "estoque projetado"]
+        )
         if row_stock is not None:
-            # Suposição: ATP(cum) cresce quando há “sobra” de estoque acumulada.
-            vals = pd.to_numeric(row_stock.reindex(atp_index).values, errors="coerce").fillna(0).astype(float)
-            # Garante não negativo
+            s_stock = pd.Series(row_stock, index=atp_index)
+            vals = pd.to_numeric(s_stock, errors="coerce").fillna(0).astype(float)
             vals = np.clip(vals, 0, None)
-            # Interpreta como acumulado
             atp_cum_series = pd.Series(vals, index=atp_index)
 
     # 3) Render
     if atp_cum_series is None:
-        st.info("Não encontrei a linha **ATP(cum)** na tabela do MPS e não foi possível reconstruí-la. \
-    Gere o MPS novamente (página 06) com o cálculo de ATP habilitado.")
+        st.info(
+            "Não encontrei a linha **ATP(cum)** na tabela do MPS e não foi possível reconstruí-la. "
+            "Gere o MPS novamente (página 06) com o cálculo de ATP habilitado."
+        )
     else:
-        # DataFrame para exibir e plotar
+        # DataFrame para exibir e plotar (valores ACUMULADOS)
         plot_df = pd.DataFrame({
             "Mês": atp_cum_series.index,
             "ATP acumulado (unid)": atp_cum_series.values.astype(int)
@@ -571,10 +578,16 @@ with tabs[2]:
             x=alt.X("Mês:N", sort=list(plot_df["Mês"]), title="Mês"),
             y=alt.Y("ATP acumulado (unid):Q", title="ATP acumulado (unid)"),
             tooltip=["Mês", alt.Tooltip("ATP acumulado (unid):Q", format=",.0f")]
-        ).properties(height=340, width="container",
-                    title="ATP acumulado (igual à última linha do MPS)")
+        ).properties(
+            height=340,
+            width="container",
+            title="ATP acumulado (igual à última linha do MPS)"
+        )
 
-        labels = alt.Chart(plot_df).mark_text(dy=-6, fontSize=11).encode(
+        labels = alt.Chart(plot_df).mark_text(
+            dy=-6,
+            fontSize=11
+        ).encode(
             x="Mês:N",
             y=alt.Y("ATP acumulado (unid):Q", stack=None),
             text=alt.Text("ATP acumulado (unid):Q", format=",.0f"),
@@ -586,6 +599,7 @@ with tabs[2]:
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
         st.dataframe(plot_df, use_container_width=True, height=260)
+
 
 
 # ======================================================
