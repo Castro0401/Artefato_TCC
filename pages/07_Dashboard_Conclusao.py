@@ -532,7 +532,7 @@ with tabs[2]:
                 return df.loc[lbl]
         return None
 
-    # 1) pegar diretamente a linha ATP(cum) na ORDEM das colunas do MPS
+        # 1) pegar diretamente a linha ATP(cum) na ORDEM das colunas do MPS
     atp_cum_series: pd.Series | None = None
 
     row_atp_cum = _find_row_casefold(
@@ -541,10 +541,9 @@ with tabs[2]:
     )
 
     if row_atp_cum is not None:
-        # mantém exatamente a ordem das colunas da tabela do MPS
         col_labels = list(mps_tbl_display.columns)
         s_atp = pd.Series(row_atp_cum, index=col_labels)
-        vals = pd.to_numeric(s_atp.values, errors="coerce").fillna(0).astype(float)
+        vals = pd.to_numeric(s_atp, errors="coerce").fillna(0).astype(float).to_numpy()
         atp_cum_series = pd.Series(vals, index=col_labels)
 
     # 2) fallback: estoque projetado como proxy, se não achar ATP(cum)
@@ -556,16 +555,10 @@ with tabs[2]:
         if row_stock is not None:
             col_labels = list(mps_tbl_display.columns)
             s_stock = pd.Series(row_stock, index=col_labels)
-            vals = pd.to_numeric(s_stock.values, errors="coerce").fillna(0).astype(float)
+            vals = pd.to_numeric(s_stock, errors="coerce").fillna(0).astype(float).to_numpy()
             vals = np.clip(vals, 0, None)
             atp_cum_series = pd.Series(vals, index=col_labels)
 
-    if atp_cum_series is None:
-        st.info(
-            "Não encontrei a linha **ATP(cum)** na tabela do MPS e não foi possível reconstruí-la. "
-            "Gere o MPS novamente (página 06) com o cálculo de ATP habilitado."
-        )
-    else:
         # 3) formata rótulos de mês (se forem datas, vira 'Set/25'; caso contrário, usa o texto original)
         PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
 
