@@ -516,122 +516,113 @@ with tabs[2]:
                    "Ajuste no **05_Inputs_MPS**.")
 
     # =============================
-    # ATP — “dá pra atender novas demandas?” (ACUMULADO)
+    # ATP — mensal derivado do ATP(cum) (ordem idêntica ao MPS)
     # =============================
     st.divider()
-    st.markdown("## 🧮 ATP acumulado — saldo até cada mês")
+    st.markdown("## 🧮 ATP — Capacidade de atender novas demandas (por mês)")
 
-    # --- helpers para achar linhas na tabela display
-    def _find_row(df: pd.DataFrame, candidates: list[str]):
-        idx_norm = df.index.astype(str).str.strip().str.lower()
-        for cand in candidates:
-            m = (idx_norm == cand.strip().lower())
-            if m.any():
-                pos = np.where(m)[0][0]
-                label = df.index[pos]
-                return df.loc[label]
-        return None
+    # Ordem de meses vem da tabela do MPS
+    atp_index = list(mps_tbl_display.columns)  # esta é a ordem que queremos preservar
 
-    # 1) Tentar pegar o ATP acumulado diretamente do display (linha 'ATP(cum)')
-    row_atp_cum = _find_row(mps_tbl_display, ["atp(cum)", "atp (cum)", "atp acumulado", "saldo atp"])
-    if row_atp_cum is not None:
-        # row_atp_cum pode ser Series, list ou ndarray dependendo do ambiente.
-        raw = np.asarray(row_atp_cum, dtype=object)          # garante ndarray
-        num = pd.to_numeric(raw, errors="coerce")            # numeric (array)
-        atp_cum_vals = np.nan_to_num(num, nan=0.0).astype(float)
-        # garante lista para rótulos
-        atp_index = list(mps_tbl_display.columns)
-    else:
-        # 2) Se não houver, tentar reconstruir: usa mps_detail['atp'] (mensal) e acumula com cumsum
+    # Tenta obter linha "ATP(cum)" e derivar mensal por diferença
+    def _monthly_atp_from_cum(df_disp: pd.DataFrame) -> pd.Series | None:
+        try:
+            idx_norm = df_disp.index.astype(str).str.strip().str.lower()
+            m = (idx_norm == "atp(cum)".lower())
+            if not m.any():
+                return None
+            row = df_disp.loc[df_disp.index[m][0]]
+            cum_vals = pd.to_numeric(row.values, errors="coerce").fillna(0.0).values.astype(float)
+            monthly = np.diff(np.r_[0.0, cum_vals])
+            monthly = np.clip(monthly, 0, None)  # nada negativo
+            return pd.Series(monthly, index=df_disp.columns)
+        except Exception:
+            return None
+
+    atp_monthly_series = _monthly_atp_from_cum(mps_tbl_display)
+
+    # Fallback: se não houver ATP(cum), tentar mps_detail['atp'] (e alinhar à ordem)
+    if atp_monthly_series is None:
         mps_detail = st.session_state.get("mps_detail", None)
         if isinstance(mps_detail, pd.DataFrame) and ("atp" in mps_detail.columns):
-            atp_monthly = pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0).values.astype(float)
-            atp_cum_vals = np.cumsum(np.clip(atp_monthly, 0, None))
-            # rótulos: tenta vir da previsão; se não, das colunas do display
-            if "forecast_df" in st.session_state:
-                atp_index = st.session_state["forecast_df"]["ds"].tolist()
+            # Tenta mapear labels de forecast_df para a mesma máscara do display
+            labels_ds = st.session_state.get("forecast_df", pd.DataFrame()).get("ds", pd.Series([], dtype="datetime64[ns]"))
+            PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+            def _fmt(ts): 
+                ts = pd.to_datetime(ts); return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
+            labels_fmt = [_fmt(x) for x in labels_ds] if len(labels_ds) else []
+            vals_map = {}
+            try:
+                if "ds" in mps_detail.columns:
+                    # Se vier com as datas, formata igual
+                    _fmt_series = [_fmt(x) for x in pd.to_datetime(mps_detail["ds"])]
+                    for k, v in zip(_fmt_series, pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0.0).values):
+                        vals_map[k] = float(max(0.0, v))
+                else:
+                    # Caso só tenha a coluna 'atp', alinhar pela ordem das labels_fmt
+                    for k, v in zip(labels_fmt, pd.to_numeric(mps_detail["atp"], errors="coerce").fillna(0.0).values):
+                        vals_map[k] = float(max(0.0, v))
+            except Exception:
+                vals_map = {}
+            aligned = [vals_map.get(k, 0.0) for k in atp_index]
+            atp_monthly_series = pd.Series(aligned, index=atp_index)
+
+    if atp_monthly_series is None:
+        st.info("Não encontrei o **ATP** no resultado. Gere o MPS novamente ou habilite o cálculo de ATP no core.")
+    else:
+        # Monta DF na ordem correta (categorical)
+        atp_df = pd.DataFrame({
+            "Mês": atp_index,
+            "ATP (unid/mês)": pd.to_numeric(atp_monthly_series.reindex(atp_index).values, errors="coerce").fillna(0).astype(int)
+        })
+        atp_df["Mês"] = pd.Categorical(atp_df["Mês"], categories=atp_index, ordered=True)
+        atp_df = atp_df.sort_values("Mês", kind="stable").reset_index(drop=True)
+
+        extra = st.number_input(
+            "Demanda extra hipotética (un/mês)", min_value=0, step=1, value=0,
+            help="Valor fixo de nova demanda a testar em cada mês."
+        )
+        atp_df["Demanda extra"] = int(extra)
+        atp_df["Atende"] = atp_df["ATP (unid/mês)"] >= atp_df["Demanda extra"]
+
+        # Gráfico
+        color_scale = alt.Scale(domain=[True, False], range=["#16a34a", "#dc2626"])
+        bars = alt.Chart(atp_df).mark_bar().encode(
+            x=alt.X("Mês:N", title="Mês", sort=atp_index),
+            y=alt.Y("ATP (unid/mês):Q", title="ATP (unid/mês)", scale=alt.Scale(nice=True, zero=True)),
+            color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
+            tooltip=["Mês", alt.Tooltip("ATP (unid/mês):Q", format=",.0f"), "Atende"]
+        )
+        labels = alt.Chart(atp_df).mark_text(dy=-6, fontSize=11).encode(
+            x=alt.X("Mês:N", sort=atp_index),
+            y=alt.Y("ATP (unid/mês):Q", stack=None),
+            text=alt.Text("ATP (unid/mês):Q", format=",.0f"),
+            color=alt.value("#111827")
+        )
+        threshold = alt.Chart(atp_df).mark_rule(color="#0f172a", strokeDash=[6,4]).encode(
+            y="Demanda extra:Q",
+            x=alt.X("Mês:N", sort=atp_index)
+        )
+        st.altair_chart(
+            (bars + labels + threshold).properties(
+                height=340, width="container",
+                title=f"ATP por mês (linha = demanda extra: {extra} un/mês)"
+            ),
+            use_container_width=True
+        )
+
+        # Tabela e resumo
+        show_df = atp_df[["Mês", "ATP (unid/mês)"]].copy()
+        st.dataframe(show_df, use_container_width=True, height=280)
+
+        if extra > 0:
+            meses_ok = atp_df.loc[atp_df["Atende"], "Mês"].astype(str).tolist()
+            if meses_ok:
+                st.success(f"Com **{extra} un/mês** de demanda extra, meses atendidos: {', '.join(meses_ok)}.")
             else:
-                atp_index = mps_tbl_display.columns
+                st.warning(f"Com **{extra} un/mês**, nenhum mês teria ATP suficiente.")
         else:
-            st.info("Não encontrei **ATP(cum)** nem **ATP mensal** para acumular. Gere o MPS novamente.")
-            st.stop()
-
-    # Normaliza rótulos de mês (Jan/25 etc.)
-    PT_MON = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
-    def _fmt_m(y):
-        ts = pd.to_datetime(y, errors="coerce")
-        if pd.isna(ts):
-            # Se já vier no formato 'Set/25'
-            return str(y)
-        return f"{PT_MON[ts.month-1]}/{ts.year%100:02d}"
-
-    labels_atp = [_fmt_m(x) for x in atp_index]
-
-    # DataFrame base (acumulado)
-    atp_df = pd.DataFrame({
-        "Mês": labels_atp,
-        "ATP acumulado (unid)": atp_cum_vals.astype(float)
-    })
-
-    # Entrada: demanda extra FIXA por mês → acumulada ao longo do horizonte
-    extra = st.number_input(
-        "Demanda extra hipotética (un/mês)", min_value=0, step=1, value=0,
-        help="Teste uma demanda adicional fixa por mês (linha de referência acumulada)."
-    )
-    n = len(atp_df)
-    cum_extra = extra * np.arange(1, n+1, dtype=float)
-    atp_df["Demanda extra (acum)"] = cum_extra
-    atp_df["Atende"] = atp_df["ATP acumulado (unid)"] >= atp_df["Demanda extra (acum)"]
-
-    # Gráfico (Altair): barras = ATP acumulado; linha = acumulado da demanda extra
-    import altair as alt
-    color_scale = alt.Scale(domain=[True, False], range=["#16a34a", "#dc2626"])  # verde / vermelho
-
-    bars = alt.Chart(atp_df).mark_bar().encode(
-        x=alt.X("Mês:N", title="Mês", sort=None),
-        y=alt.Y("ATP acumulado (unid):Q", title="ATP acumulado (unid)", scale=alt.Scale(nice=True, zero=True)),
-        color=alt.Color("Atende:N", title="Atende a extra?", scale=color_scale),
-        tooltip=[
-            "Mês",
-            alt.Tooltip("ATP acumulado (unid):Q", format=",.0f"),
-            alt.Tooltip("Demanda extra (acum):Q", format=",.0f"),
-            "Atende"
-        ]
-    )
-
-    labels = alt.Chart(atp_df).mark_text(dy=-6, fontSize=11).encode(
-        x="Mês:N",
-        y=alt.Y("ATP acumulado (unid):Q", stack=None),
-        text=alt.Text("ATP acumulado (unid):Q", format=",.0f"),
-        color=alt.value("#111827")
-    )
-
-    line = alt.Chart(atp_df).mark_line(point=True, strokeDash=[6,4], strokeWidth=2, color="#0f172a").encode(
-        x="Mês:N",
-        y=alt.Y("Demanda extra (acum):Q", title=None)
-    )
-
-    st.altair_chart(
-        (bars + labels + line).properties(
-            height=360, width="container",
-            title=f"ATP acumulado vs. demanda extra acumulada (extra = {extra} un/mês)"
-        ).configure_axis(labelFontSize=12, titleFontSize=12)
-        .configure_legend(labelFontSize=12, titleFontSize=12),
-        use_container_width=True
-    )
-
-    # Métrica da “última linha do MPS” (saldo final)
-    atp_final = float(atp_df["ATP acumulado (unid)"].iloc[-1])
-    st.metric("ATP final (última linha do MPS)", f"{atp_final:,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
-
-    # Tabela opcional
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    atp_df_show = atp_df.copy()
-    atp_df_show["✔ Atende?"] = atp_df_show["Atende"].map({True:"✅", False:"❌"})
-    st.dataframe(
-        atp_df_show[["Mês","ATP acumulado (unid)","Demanda extra (acum)","✔ Atende?"]],
-        use_container_width=True, height=300
-    )
+            st.caption("Ajuste a demanda extra acima para testar cenários.")
 
 
 # ======================================================
