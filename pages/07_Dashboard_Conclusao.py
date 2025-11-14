@@ -535,8 +535,12 @@ with tabs[2]:
     # 1) Tentar pegar o ATP acumulado diretamente do display (linha 'ATP(cum)')
     row_atp_cum = _find_row(mps_tbl_display, ["atp(cum)", "atp (cum)", "atp acumulado", "saldo atp"])
     if row_atp_cum is not None:
-        atp_cum_vals = pd.to_numeric(row_atp_cum.values, errors="coerce").fillna(0).values.astype(float)
-        atp_index = mps_tbl_display.columns
+        # row_atp_cum pode ser Series, list ou ndarray dependendo do ambiente.
+        raw = np.asarray(row_atp_cum, dtype=object)          # garante ndarray
+        num = pd.to_numeric(raw, errors="coerce")            # numeric (array)
+        atp_cum_vals = np.nan_to_num(num, nan=0.0).astype(float)
+# garante lista para rótulos
+atp_index = list(mps_tbl_display.columns)
     else:
         # 2) Se não houver, tentar reconstruir: usa mps_detail['atp'] (mensal) e acumula com cumsum
         mps_detail = st.session_state.get("mps_detail", None)
