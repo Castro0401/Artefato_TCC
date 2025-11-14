@@ -358,7 +358,12 @@ if res is not None:
         champ = res.get("champion", {}) or {}
 
     modelo_nome = champ.get("model", "Desconhecido")
-    st.subheader(f"🏆 Modelo Campeão: {modelo_nome}" + (" (Modo rápido)" if st.session_state.get('FAST_MODE', False) else ""))
+    if modelo_nome.upper() == "SARIMAX":
+        modelo_nome = "SARIMA"
+    st.subheader(
+        f"🏆 Modelo Campeão: {modelo_nome}" +
+        (" (Modo rápido)" if st.session_state.get('FAST_MODE', False) else "")
+    )
 
     def _fmt(x):
         try: return f"{float(x):.4g}"
