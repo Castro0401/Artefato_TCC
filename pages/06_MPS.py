@@ -81,7 +81,7 @@ orders_df["y"] = orders_df["y"].astype(int)
 
 # Aviso
 st.info(
-    "Todos os parâmetros abaixo **vêm da página 05_Inputs_MPS**. "
+    "Todos os parâmetros abaixo **vêm da página anterior, Inputs MPS**. "
     "Para ajustar política, tamanhos de lote, estoque em mão, lead time, "
     "estoque de segurança, pedidos em carteira e congelamento, volte à página de inputs.",
     icon="ℹ️",
