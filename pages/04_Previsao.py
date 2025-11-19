@@ -295,15 +295,22 @@ if submitted and not ss.is_running:
         with st.spinner("Executando pipeline…"):
             _stdout, _stderr = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(_stdout), contextlib.redirect_stderr(_stderr):
+                # Flag do modo rápido (Formula 1)
+                FAST_MODE = bool(st.session_state.get("FAST_MODE", False))
+
                 resultados = pipe.run_full_pipeline(
                     data_input=s_monthly,
-                    sheet_name=None, date_col=None, value_col=None,
-                    horizon=int(HORIZON), seasonal_period=12,
+                    sheet_name=None,
+                    date_col=None,
+                    value_col=None,
+                    horizon=int(HORIZON),
+                    seasonal_period=12,
                     do_original=True,
                     do_log=bool(DO_LOG),
                     do_bootstrap=bool(DO_BOOTSTRAP),
                     n_bootstrap=int(N_BOOTSTRAP),
                     bootstrap_block=24,
+                    fast_mode=FAST_MODE,      # <<< ESSA LINHA É A CRÍTICA
                     save_dir=None,
                 )
             if _stdout.getvalue(): _push_log(_stdout.getvalue())
