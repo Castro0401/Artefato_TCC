@@ -11,7 +11,7 @@ import streamlit as st
 # (ajuste o caminho da sua página final)
 CONCLUSAO_PAGE = "pages/07_Dashboard_Conclusao.py"
 
-st.title("🗓️ 06_MPS — Plano Mestre de Produção (mensal)")
+st.title("🗓️ MPS — Plano Mestre de Produção (mensal)")
 
 # =========================
 # Guardas de etapa
