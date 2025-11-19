@@ -65,7 +65,7 @@ for key in ["experiments_df", "experiments_table", "pipeline_experiments"]:
         break
 
 
-tabs = st.tabs(["📊 Acurácia", "🧭 Vieses", "🏭 MPS & KPIs", "💡 Recomendações"])
+tabs = st.tabs(["📊 Acurácia", "🧭 Viéses", "🏭 MPS & KPIs", "💡 Recomendações"])
 
 # ======================================================
 # TAB 1 — ACURÁCIA (cards enxutos + gráfico limpo)
