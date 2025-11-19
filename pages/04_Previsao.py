@@ -310,7 +310,6 @@ if submitted and not ss.is_running:
                     do_bootstrap=bool(DO_BOOTSTRAP),
                     n_bootstrap=int(N_BOOTSTRAP),
                     bootstrap_block=24,
-                    fast_mode=FAST_MODE,      # <<< ESSA LINHA É A CRÍTICA
                     save_dir=None,
                 )
             if _stdout.getvalue(): _push_log(_stdout.getvalue())
