@@ -265,7 +265,7 @@ if submitted and not ss.is_running:
             "do_log": bool(DO_LOG),
             "do_bootstrap": bool(DO_BOOTSTRAP),
             "n_bootstrap": int(N_BOOTSTRAP),
-            "FAST_MODE": bool(FAST_MODE),
+            "FAST_MODE": False,
             "grid_sizes": {
                 "Croston": len(getattr(pipe, "CROSTON_ALPHAS", [])),
                 "SBA": len(getattr(pipe, "SBA_ALPHAS", [])),
