@@ -123,7 +123,7 @@ with st.form(key="previsao_form"):
     restore_full_grids(pipe)
     if FAST_MODE:
         apply_fast_grids(pipe)
-        max_boot, default_boot = 10, 10
+        max_boot, default_boot = 50, 20
     else:
         max_boot, default_boot = 50, 20
 
