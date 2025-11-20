@@ -612,24 +612,29 @@ with tabs[2]:
             )
 
             line = alt.Chart(chart_data).mark_rule(
-                color="#0f172a", strokeDash=[6,4]
+                color="#0f172a", strokeDash=[6, 4]
             ).encode(
                 y="Demanda extra (fixa):Q"
             )
 
-            st.altair_chart(
-                (bars + labels + line).properties(
-                    height=360,
-                    width="100%",
-                    title=(
-                        "ATP acumulado vs. demanda extra (fixa) "
-                        f"(extra = {extra} un/mês)"
-                    ),
-                )
-                .configure_axis(labelFontSize=12, titleFontSize=12)
-                .configure_legend(labelFontSize=12, titleFontSize=12),
-                use_container_width=True
+            chart = (
+                bars + labels + line
+            ).properties(
+                height=360,
+                title=(
+                    "ATP acumulado vs. demanda extra (fixa) "
+                    f"(extra = {extra} un/mês)"
+                ),
+            ).configure_axis(
+                labelFontSize=12,
+                titleFontSize=12
+            ).configure_legend(
+                labelFontSize=12,
+                titleFontSize=12
             )
+
+            st.altair_chart(chart, use_container_width=True)
+
 
         # ----- TABELA -----
         with right:
