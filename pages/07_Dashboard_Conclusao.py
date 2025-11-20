@@ -416,6 +416,21 @@ with tabs[2]:
     cost_ruptura = total_ruptura * pi_shortage
     cost_total   = C_setup_total + C_hold_total + cost_ruptura
 
+        # ------ Guarda baseline de custos para Tab Recomendações ------
+    st.session_state["mps_costs_baseline"] = {
+        "C_setup_total": float(C_setup_total),
+        "C_hold_total": float(C_hold_total),
+        "cost_ruptura": float(cost_ruptura),
+        "cost_total": float(cost_total),
+        "lot_policy": lot_policy,
+        "Q_user": int(Q_user) if "Q_user" in locals() else None,
+        "H_m": float(H_m),
+        "D_m": float(D_m),
+        "p_m": float(p_m),
+        "time_base": time_base,
+    }
+
+
     # ---------- Expander com variáveis ----------
     with st.expander("ℹ️ Variáveis (05_Inputs_MPS) e parâmetros usados"):
         a1, a2, a3, a4 = st.columns(4)
@@ -960,41 +975,43 @@ with tabs[3]:
             .properties(height=260)
         )
         st.altair_chart(chart, use_container_width=True)
-
     # ------------------------------------------------------
-    # Comparação com MPS atual (se existir)
+    # Comparação com MPS atual (baseline vindo da Tab 3)
     # ------------------------------------------------------
     st.markdown("##### Comparação rápida com o MPS atual (Gerado na página 06)")
-    base_setup_total = None
-    base_hold_total = None
-    base_total = None
-    if isinstance(mps_table, pd.DataFrame):
-        row_qtd = _find_row(mps_table, ["Qtde. MPS", "Qtde MPS", "quantidade mps", "mps qty"])
-        row_est = _find_row(mps_table, ["Estoque Proj.", "Estoque Projetado", "estoque"])
-        if (row_qtd is not None) and (row_est is not None):
-            # custo de setup do MPS atual ≈ nº meses com pedido × A
-            n_orders = int(np.nansum(row_qtd.values.astype(float) > 0))
-            base_setup_total = A_lbl * n_orders
-            # custo de manter do MPS atual ≈ Σ estoque_mês × H
-            est_mes = np.clip(row_est.values.astype(float), 0, None)
-            base_hold_total = float(np.nansum(est_mes)) * H_lbl
-            base_total = base_setup_total + base_hold_total
 
-    colA, colB, colC = st.columns(3)
-    with colA:
-        st.metric("MPS Simulado — Total (R$)", _safe(cost_total_sim, 2))
-    with colB:
-        if base_total is not None:
-            st.metric("MPS atual — Total (R$)", _safe(base_total, 2))
-        else:
-            st.caption("Plano atual indisponível para comparação.")
-    with colC:
-        if base_total is not None:
+    custos_base = st.session_state.get("mps_costs_baseline", None)
+
+    def _fmt_money(x, nd=2):
+        try:
+            return f"{float(x):,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return str(x)
+
+    if not custos_base:
+        st.info(
+            "Não encontrei os **custos do MPS atual**. "
+            "Vá na aba **MPS & Custos** e salve os dados (Tab 3) para habilitar esta comparação."
+        )
+    else:
+        base_setup_total = float(custos_base.get("C_setup_total", 0.0))
+        base_hold_total  = float(custos_base.get("C_hold_total", 0.0))
+        base_rupt_total  = float(custos_base.get("cost_ruptura", 0.0))
+        base_total       = float(custos_base.get("cost_total", 0.0))
+
+        colA, colB, colC = st.columns(3)
+        with colA:
+            st.metric("MPS Simulado — Total (R$)", _safe(cost_total_sim, 2))
+        with colB:
+            st.metric("MPS atual — Total (R$)", _fmt_money(base_total, 2))
+        with colC:
             delta = cost_total_sim - base_total
-            sinal = "↑" if delta > 0 else "↓"
-            st.metric("Diferença (sim − atual)", _safe(delta, 2), help=f"Positivo = {sinal} custo frente ao plano atual")
-        else:
-            st.caption("—")
+            st.metric(
+                "Diferença (sim − atual)",
+                _fmt_money(delta, 2),
+                help="Positivo = cenário simulado mais caro; negativo = mais barato que o MPS atual."
+            )
+
 
     # Download dos resultados do grid
     st.download_button(
