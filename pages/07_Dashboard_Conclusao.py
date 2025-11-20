@@ -829,7 +829,7 @@ with tabs[3]:
     # ======================================================
     # BLOCO: Simulador interativo de Q (política FX) — HORIZONTE TRAVADO
     # ======================================================
-    st.subheader("What-if — Impacto da Mudança de Parâmetros no Custo Relevante Total")
+    st.subheader("Sensibilidade — Impacto da Mudança de Parâmetros no Custo Relevante Total")
 
     # Horizonte travado no mesmo da previsão (página 04)
     HORIZ_BASE = int(st.session_state.get("forecast_h", len(st.session_state.get("forecast_df", [])) or 1))
