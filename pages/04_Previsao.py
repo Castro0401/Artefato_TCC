@@ -105,27 +105,15 @@ with st.form(key="previsao_form"):
     st.sidebar.header("⚙️ Configurações")
     HORIZON = st.sidebar.selectbox("Horizonte (meses)", [6,8,12], index=0)
 
-    FAST_MODE = st.sidebar.toggle(
-        "Modo rápido (grade reduzida)",
-        value=False,
-        help="Quando desligado (padrão), usa as grades integrais do pipeline."
-    )
-
     # Controles de LOG/BOOTSTRAP
     DO_LOG = st.sidebar.checkbox("Aplicar log", value=True)
     DO_BOOTSTRAP = st.sidebar.checkbox("Ativar bootstrap", value=True)
 
     # Grava no session_state para outros pontos da página
-    ss["FAST_MODE"] = bool(FAST_MODE)
     ss["HORIZON"] = int(HORIZON)
 
     # *** Ordem garantida: restaura grades completas e só depois aplica rápido, se for o caso
-    restore_full_grids(pipe)
-    if FAST_MODE:
-        apply_fast_grids(pipe)
-        max_boot, default_boot = 50, 20
-    else:
-        max_boot, default_boot = 50, 20
+    max_boot, default_boot = 50, 20
 
     if DO_BOOTSTRAP:
         N_BOOTSTRAP = st.sidebar.slider(
@@ -155,8 +143,7 @@ with st.form(key="previsao_form"):
     rounds_desc = ["original"]
     if DO_LOG: rounds_desc.append("log")
     if DO_BOOTSTRAP: rounds_desc.append(f"bootstrap×{N_BOOTSTRAP}")
-    st.caption(f"Configuração: rápido={'ON' if FAST_MODE else 'OFF'} | combinações≈{max(1,base)} | rodadas: {', '.join(rounds_desc)}")
-
+    
     submitted = st.form_submit_button("▶️ Rodar previsão", type="primary", disabled=ss.is_running)
 
 # ===== console filtrado + progresso acumulativo (rodadas/famílias)
