@@ -103,23 +103,31 @@ def apply_fast_grids(module):
 # ===== form (config)
 with st.form(key="previsao_form"):
     st.sidebar.header("⚙️ Configurações")
-    HORIZON = st.sidebar.selectbox("Horizonte (meses)", [6,8,12], index=0)
+
+    # Horizonte da previsão
+    HORIZON = st.sidebar.selectbox("Horizonte (meses)", [6, 8, 12], index=0)
 
     # Controles de LOG/BOOTSTRAP
     DO_LOG = st.sidebar.checkbox("Aplicar log", value=True)
     DO_BOOTSTRAP = st.sidebar.checkbox("Ativar bootstrap", value=True)
 
-    # Grava no session_state para outros pontos da página
+    # Salva só o horizonte (sem FAST_MODE)
     ss["HORIZON"] = int(HORIZON)
 
-    # *** Ordem garantida: restaura grades completas e só depois aplica rápido, se for o caso
+    # Sempre restaurar as grades COMPLETAS do pipeline
+    restore_full_grids(pipe)
+
+    # Limites das réplicas do bootstrap (sempre os “completos”)
     max_boot, default_boot = 50, 20
 
     if DO_BOOTSTRAP:
         N_BOOTSTRAP = st.sidebar.slider(
             "Réplicas do bootstrap",
-            min_value=1, max_value=max_boot, value=default_boot, step=1,
-            help="Reduzir as réplicas acelera a execução, mas pode não encontrar o melhor modelo."
+            min_value=1,
+            max_value=max_boot,
+            value=default_boot,
+            step=1,
+            help="Reduzir as réplicas acelera a execução, mas pode não encontrar o melhor modelo ideal."
         )
         st.sidebar.caption(
             "⚠️ **Menos réplicas** → roda mais rápido, mas **pode não encontrar** o melhor modelo."
@@ -127,24 +135,49 @@ with st.form(key="previsao_form"):
     else:
         N_BOOTSTRAP = 0
 
-    # Exibição (informativa) do tamanho da grade
+    # Exibição (informativa) do tamanho da grade (sem rápido)
     def _len(x):
-        try: return len(x)
-        except Exception: return 0
+        try:
+            return len(x)
+        except Exception:
+            return 0
+
     base = 0
-    base += _len(getattr(pipe,"CROSTON_ALPHAS",[]))
-    base += _len(getattr(pipe,"SBA_ALPHAS",[]))
-    base += _len(getattr(pipe,"TSB_ALPHA_GRID",[])) * _len(getattr(pipe,"TSB_BETA_GRID",[]))
-    base += _len(getattr(pipe,"RF_LAGS_GRID",[])) * _len(getattr(pipe,"RF_N_ESTIMATORS_GRID",[])) * _len(getattr(pipe,"RF_MAX_DEPTH_GRID",[]))
-    if hasattr(pipe,"SARIMA_GRID"):
+    base += _len(getattr(pipe, "CROSTON_ALPHAS", []))
+    base += _len(getattr(pipe, "SBA_ALPHAS", []))
+    base += _len(getattr(pipe, "TSB_ALPHA_GRID", [])) * _len(getattr(pipe, "TSB_BETA_GRID", []))
+    base += (
+        _len(getattr(pipe, "RF_LAGS_GRID", []))
+        * _len(getattr(pipe, "RF_N_ESTIMATORS_GRID", []))
+        * _len(getattr(pipe, "RF_MAX_DEPTH_GRID", []))
+    )
+    if hasattr(pipe, "SARIMA_GRID"):
         g = pipe.SARIMA_GRID
-        base += _len(g.get("p",[]))*_len(g.get("d",[]))*_len(g.get("q",[]))*_len(g.get("P",[]))*_len(g.get("D",[]))*_len(g.get("Q",[]))
+        base += (
+            _len(g.get("p", []))
+            * _len(g.get("d", []))
+            * _len(g.get("q", []))
+            * _len(g.get("P", []))
+            * _len(g.get("D", []))
+            * _len(g.get("Q", []))
+        )
 
     rounds_desc = ["original"]
-    if DO_LOG: rounds_desc.append("log")
-    if DO_BOOTSTRAP: rounds_desc.append(f"bootstrap×{N_BOOTSTRAP}")
-    
-    submitted = st.form_submit_button("▶️ Rodar previsão", type="primary", disabled=ss.is_running)
+    if DO_LOG:
+        rounds_desc.append("log")
+    if DO_BOOTSTRAP:
+        rounds_desc.append(f"bootstrap×{N_BOOTSTRAP}")
+
+    st.caption(
+        f"Configuração: combinações≈{max(1, base)} | "
+        f"rodadas: {', '.join(rounds_desc)}"
+    )
+
+    submitted = st.form_submit_button(
+        "▶️ Rodar previsão",
+        type="primary",
+        disabled=ss.is_running,
+    )
 
 # ===== console filtrado + progresso acumulativo (rodadas/famílias)
 prog = st.progress(0)
@@ -354,10 +387,8 @@ if res is not None:
     modelo_nome = champ.get("model", "Desconhecido")
     if modelo_nome.upper() == "SARIMAX":
         modelo_nome = "SARIMA"
-    st.subheader(
-        f"🏆 Modelo Campeão: {modelo_nome}" +
-        (" (Modo rápido)" if st.session_state.get('FAST_MODE', False) else "")
-    )
+
+    st.subheader(f"🏆 Modelo Campeão: {modelo_nome}")
 
     def _fmt(x):
         try: return f"{float(x):.4g}"
