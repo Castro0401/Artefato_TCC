@@ -296,7 +296,7 @@ if submitted and not ss.is_running:
             _stdout, _stderr = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(_stdout), contextlib.redirect_stderr(_stderr):
                 # Flag do modo rápido (Formula 1)
-                FAST_MODE = bool(st.session_state.get("FAST_MODE", False))
+                FAST_MODE = False
 
                 resultados = pipe.run_full_pipeline(
                     data_input=s_monthly,
