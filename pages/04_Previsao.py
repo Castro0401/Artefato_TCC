@@ -331,7 +331,6 @@ if submitted and not ss.is_running:
                     n_bootstrap=int(N_BOOTSTRAP),
                     bootstrap_block=24,
                     save_dir=None,
-                    FAST_MODE=False,
                 )
             if _stdout.getvalue(): _push_log(_stdout.getvalue())
             if _stderr.getvalue(): _push_log(_stderr.getvalue())
