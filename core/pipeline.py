@@ -82,7 +82,7 @@ RF_N_ESTIMATORS_GRID = [200, 500]
 RF_MAX_DEPTH_GRID = [None, 5, 10]
 
 # grade compacta para SARIMA; pode ser aberta em produção
-SARIMA_GRID = {"p":[0,1,2], "d":[1], "q":[0,1,2], "P":[0,1], "D":[0,1], "Q":[0,1]}
+SARIMA_GRID = {"p":[0,1,2], "d":[0,1], "q":[0,1,2], "P":[0,1], "D":[0,1], "Q":[0,1]}
 
 # LSTM opcional: o código apenas roda se TensorFlow estiver presente
 try:
