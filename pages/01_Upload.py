@@ -174,9 +174,21 @@ if file:
                 .sort_values("month")
             )
 
-    # rótulo tipo Set/25
-    monthly["ds"] = monthly["month"].apply(lambda ts: f"{PT_MON[ts.month]}/{str(ts.year)[-2:]}")
-    monthly = monthly[["ds", "y"]].reset_index(drop=True)
+    # ds deve permanecer como datetime (1º dia do mês)
+    monthly = monthly.rename(columns={"month": "ds"})
+
+    # label apenas para exibição (NÃO usar para cálculo)
+    monthly["ds_label"] = monthly["ds"].apply(
+        lambda ts: f"{PT_MON[ts.month]}/{str(ts.year)[-2:]}"
+    )
+
+    # exibição no Streamlit
+    st.success(f"Arquivo válido! Série mensal preparada para **{product_name}** 👇")
+    st.dataframe(monthly[["ds_label", "y"]], use_container_width=True)
+
+    # salvar no estado COM ds datetime
+    st.session_state["ts_df_norm"] = monthly[["ds", "y"]].copy()
+
 
 
     # ---- guarda no estado para as próximas etapas ----

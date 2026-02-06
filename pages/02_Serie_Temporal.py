@@ -33,7 +33,7 @@ def period_to_label(p: pd.Period) -> str:
     return f"{_REV_PT[p.month]}/{str(p.year)[-2:]}"
 
 # ordenar e criar eixo contínuo (preenche meses faltantes com NaN)
-df["p"] = df["ds"].apply(label_to_period)
+df["p"] = df["ds"].dt.to_period("M")
 df = df.sort_values("p").reset_index(drop=True)
 full_idx = pd.period_range(df["p"].min(), df["p"].max(), freq="M")
 df_full = pd.DataFrame({"p": full_idx}).merge(df[["p","y"]], on="p", how="left")
