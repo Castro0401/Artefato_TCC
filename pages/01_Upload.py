@@ -128,7 +128,7 @@ if file:
     product_name = str(value_col)
 
     # coerções
-    df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
+    df["ds"] = pd.to_datetime(df["ds"], errors="coerce", dayfirst=True)
     df["y"]  = pd.to_numeric(df["y"], errors="coerce")
 
     df = df.dropna(subset=["ds", "y"]).reset_index(drop=True)
