@@ -137,19 +137,47 @@ if file:
     if len(df) < 50:
         st.warning("A série tem menos de **50 observações** na granularidade original. Considere enviar um histórico maior para melhor robustez.")
 
-    # ---- agrega por mês (se vier diária/semanal) ----
-    monthly = (
-        df.assign(month=df["ds"].dt.to_period("M").dt.to_timestamp())
-          .groupby("month", as_index=False)["y"].sum()
-          .sort_values("month")
-    )
+    # ---- normaliza para mês (SEM SOMAR) ----
+    df["month"] = df["ds"].dt.to_period("M").dt.to_timestamp()
+
+    # Se já estiver mensal (1 linha por mês), não agrega
+    if df["month"].is_unique:
+        monthly = (
+            df[["month", "y"]]
+            .sort_values("month")
+            .reset_index(drop=True)
+        )
+    else:
+        st.warning("Detectei mais de uma linha no mesmo mês. Vou consolidar SEM somar.")
+
+        agg_mode = st.selectbox(
+            "Como consolidar valores quando houver duplicidade no mesmo mês?",
+            options=["último", "primeiro", "média"],
+            index=0
+        )
+
+        if agg_mode == "último":
+            monthly = (
+                df.sort_values("ds")
+                .groupby("month", as_index=False)["y"].last()
+                .sort_values("month")
+            )
+        elif agg_mode == "primeiro":
+            monthly = (
+                df.sort_values("ds")
+                .groupby("month", as_index=False)["y"].first()
+                .sort_values("month")
+            )
+        else:  # média
+            monthly = (
+                df.groupby("month", as_index=False)["y"].mean()
+                .sort_values("month")
+            )
 
     # rótulo tipo Set/25
     monthly["ds"] = monthly["month"].apply(lambda ts: f"{PT_MON[ts.month]}/{str(ts.year)[-2:]}")
-    monthly = monthly[["ds","y"]].reset_index(drop=True)
+    monthly = monthly[["ds", "y"]].reset_index(drop=True)
 
-    st.success(f"Arquivo válido! Série mensal preparada para **{product_name}** 👇")
-    st.dataframe(monthly, use_container_width=True)
 
     # ---- guarda no estado para as próximas etapas ----
     st.session_state["ts_df_norm"]   = monthly            # série mensal normalizada (ds,y)
